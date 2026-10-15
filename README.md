@@ -219,6 +219,7 @@ $ claude-proxy watch $id
 | `claude-proxy kill <id>` | stop the current turn (the conversation is kept; `send` resumes it); on an idle run, free its Claude process |
 | `claude-proxy runs` / `rm <id>` | this repository's runs, as a tree of who started what (`--all` for every run) / delete one and its clean worktree |
 | `claude-proxy events [<id>…] [--mine]` | a line each time a run finishes, fails, asks or moves account; made for a Monitor tool |
+| `claude-proxy news [--json]` | what this Claude session's runs did that it has not been told yet (each finished turn and each question once); marks them told, or with `--peek` leaves that to `--ack <mark>…` once delivered |
 
 Each run pins one Claude session, so the conversation carries over across
 Claude processes and onto other accounts, since transcripts are shared. A
@@ -226,6 +227,14 @@ background process keeps a headless stream-json Claude open for the run and
 keeps it warm for `CLAUDE_PROXY_IDLE_SECS` seconds after a turn (default 300),
 so a message sent mid-turn steers the work in progress and a quick follow-up
 skips Claude's startup. Then both exit, so an idle run costs nothing.
+
+That background process runs in a session of its own, apart from whatever
+started it, so closing the terminal or Claude Desktop does not stop a run. When
+the session that started it opens again, it hears what finished meanwhile: the
+plugin's session-start hook lists it, and the mod shows it on screen and hands
+the details to Claude with your next message. What a session was told is kept
+on disk (`claude-proxy news`), so nothing is told twice, and nothing counts as
+told before it reached the session.
 
 ### Failover
 

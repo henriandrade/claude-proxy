@@ -42,10 +42,15 @@ A Claude Code mod (function-hooks plugin, Claude Code 2.1.287+) that makes
   commands stay in this session. Attachments are not sent.
 - **A status line.** `2 runs · 1 waiting` while any run is active.
 - **Notifications without polling.** At session start the mod follows
-  `claude-proxy events --mine`. When a run it started finishes, fails, is
-  killed or asks something, it appends a notice row and submits a prompt with
-  the result or the question, which starts a turn once the session is idle,
-  like a background subagent's task notification.
+  `claude-proxy events --mine`. When a run this session started finishes,
+  fails, is killed or asks something, it appends a notice row and submits a
+  prompt with the result or the question, which starts a turn once the session
+  is idle, like a background subagent's task notification. What was told comes
+  from `claude-proxy news`, which keeps it on disk. A session reopened after
+  Claude was closed runs no turn until it gets input, so the mod shows what its
+  runs did meanwhile as a notice and in the status line, and your next message
+  carries the details to Claude; it counts as told only once that message
+  entered.
 - **Agent calls redirected.** A `tool.call` hook on Agent (and Task) refuses
   the call and points to the tool, unless the description starts with
   `[direct]`, `CLAUDE_PROXY_POLICY=off`, or `CLAUDE_PROXY_RUN` is set.
@@ -135,9 +140,9 @@ The two can be enabled together:
   stream-json one.
 - **`/clear`.** The events watcher keeps following the session id it started
   under; runs started after a `/clear` show up once the session restarts.
-- Notifications cover runs started through the tool, and runs this session
-  watches. Runs started through Bash still show in the pane and status line;
-  wait on those as before.
+- Notifications cover the runs this session started, through the tool or
+  through Bash. With a claude-proxy older than `news`, they fall back to the
+  runs started through the tool, told while the session stays open.
 - A row whose run this session never loaded (a resumed session, an older
   conversation) loads it once when drawn; a run already pruned shows its id
   only.

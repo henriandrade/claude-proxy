@@ -244,24 +244,85 @@ function doneText(run: ProxyRunsRun): string {
   )
 }
 
+/** One prompt for every run with news, so a session reopened to many finished runs wakes once. */
+async function tell($: Engine, news: ProxyRunsRun[]): Promise<void> {
+  if (news.length === 0) return
+  for (const run of news) {
+    await $.session
+      .append({
+        message: {
+          type: 'system',
+          content: [{ type: 'text', text: `run ${label(run)} · ${run.state} on ${run.account}` }],
+        },
+      })
+      .catch(err => $.ui.log(`proxy-runs: notice not appended: ${err}`, { to: 'debug' }))
+  }
+  await $.prompt.submit({
+    text: news.map(run => (run.state === 'waiting' ? askText(run) : doneText(run))).join('\n\n'),
+  })
+}
+
+type News = ProxyRunsRun & { mark: string }
+
+const delivered = new Set<string>()
+
+// `claude-proxy news` keeps what a session was told on disk, shared with
+// quota-router's hooks. It is read without marking and acknowledged only once
+// delivered, so news a session never got to see stays untold. Undefined when
+// it cannot answer (no process access, an older claude-proxy).
+async function untold($: Engine): Promise<News[] | undefined> {
+  const out = await cli($, ['news', '--json', '--peek'], { env: { CLAUDE_CODE_SESSION_ID: await $.session.id() } })
+  if (out?.exitCode !== 0) return undefined
+  const news = (JSON.parse(out.stdout) as News[]).filter(
+    r => validId(r.id) && typeof r.mark === 'string' && !delivered.has(r.mark),
+  )
+  for (const run of news) await update($, runs, all => [...all.filter(r => r.id !== run.id), run])
+  return news
+}
+
+async function acknowledge($: Engine, news: News[]): Promise<void> {
+  await cli($, ['news', '--ack', ...news.map(r => r.mark)], { env: { CLAUDE_CODE_SESSION_ID: await $.session.id() } })
+}
+
+// Live, while the session is open: a prompt of its own wakes it.
+async function tellNews($: Engine): Promise<boolean> {
+  const news = await untold($)
+  if (news === undefined) return false
+  if (news.length === 0) return true
+  for (const run of news) delivered.add(run.mark)
+  await tell($, news)
+  await acknowledge($, news)
+  return true
+}
+
+// On reopening, a session runs no turn until it gets input, so a prompt of the
+// mod's own would be lost: say so on screen, and hand it to the next prompt.
+async function announceNews($: Engine): Promise<void> {
+  const news = await untold($)
+  if (!news?.length) return
+  const what = news.map(r => `${label(r)} ${r.state === 'waiting' ? 'is waiting for an answer' : `is ${r.state}`}`)
+  await $.session
+    .append({
+      message: {
+        type: 'system',
+        content: [{ type: 'text', text: `While this session was closed: ${what.join('; ')}. Your next message brings Claude the details.` }],
+      },
+    })
+    .catch(err => $.ui.log(`proxy-runs: notice not appended: ${err}`, { to: 'debug' }))
+  $.ui.status(`${news.length} run${news.length === 1 ? '' : 's'} finished while closed`)
+}
+
 async function onEvent($: Engine, line: string): Promise<void> {
   const id = line.split(' ')[0]
   if (!id) return
   const run = await refresh($, id)
   if (!run || !(DONE.includes(run.state) || run.state === 'waiting')) return
+  if (await tellNews($)) return
   const mine = Object.values(await read($, calls)).includes(id)
   const mark = `${run.state} ${run.turns}`
   if (!mine || (await read($, told))[id] === mark) return
   await update($, told, all => ({ ...all, [id]: mark }))
-  await $.session
-    .append({
-      message: {
-        type: 'system',
-        content: [{ type: 'text', text: `run ${label(run)} · ${run.state} on ${run.account}` }],
-      },
-    })
-    .catch(err => $.ui.log(`proxy-runs: notice not appended: ${err}`, { to: 'debug' }))
-  await $.prompt.submit({ text: run.state === 'waiting' ? askText(run) : doneText(run) })
+  await tell($, [run])
 }
 
 const safely = ($: Engine, line: string) =>
@@ -288,6 +349,7 @@ async function watch($: Engine, session: string): Promise<void> {
     await update($, runs, () => list)
     $.ui.status(counter(list))
     for (const r of list) if (r.session !== session && ACTIVE.includes(r.state)) void follow($, r.id)
+    await announceNews($).catch(err => $.ui.log(`proxy-runs: news: ${err}`, { to: 'debug' }))
   }
   let rest = ''
   const events = $.process.spawn({
@@ -610,7 +672,21 @@ export const register: Register = on => {
   on('prompt.submit', async ($, e, next) => {
     await markSession($)
     const id = await read($, talking)
-    if (!id || !TYPED.includes(e.origin.kind)) return next(e)
+    if (!TYPED.includes(e.origin.kind)) return next(e)
+    if (!id) {
+      const news = await untold($).catch(() => undefined)
+      if (!news?.length) return next(e)
+      for (const run of news) delivered.add(run.mark)
+      const context = news.map(run => (run.state === 'waiting' ? askText(run) : doneText(run))).join('\n\n')
+      const entered = await next({ ...e, context: [...(e.context ?? []), context] })
+      if (entered.drop === undefined) {
+        await acknowledge($, news)
+        $.ui.status(counter(await read($, runs)))
+      } else {
+        for (const run of news) delivered.delete(run.mark)
+      }
+      return entered
+    }
     const run = (await read($, runs)).find(r => r.id === id)
     const question = run?.state === 'waiting' && run.asks.some(a => a.tool === 'AskUserQuestion')
     const argv = question ? ['answer', id, ...e.text.split('|').map(s => s.trim())] : ['send', id, e.text]
@@ -709,25 +785,29 @@ export const register: Register = on => {
     const { origin, text, isExpanded } = e.props
     if (origin.kind !== 'plugin' || origin.name !== 'proxy-runs') return next(e)
     if (e.surface === 'terminal' && isExpanded) return next(e)
-    const id = /^claude-proxy run (\S+)/.exec(text)?.[1]
-    if (!id) return next(e)
+    const notices = text.split(/\n\n(?=claude-proxy run [A-Za-z0-9]+ )/)
+    if (!notices.every(n => /^claude-proxy run [A-Za-z0-9]+ /.test(n))) return next(e)
     const { Box, Text, Markdown } = $.ui.resolve(e)
-    const run = (await read($, runs)).find(r => r.id === id)
-    const name = run?.name ?? `Run ${id}`
-    const header = text.split('\n', 1)[0] ?? ''
-    if (/ is waiting for an answer/.test(header)) {
-      const ask = /\n- (.+)/.exec(text)?.[1] ?? ''
-      return <Text color="yellow">? {name} needs an answer{ask ? ` · ${ask.slice(0, 200)}` : ''}</Text>
-    }
-    const [, state = '', account = ''] = / is (idle|failed|killed) on (\S+)/.exec(header) ?? []
-    const result = /<run-result>\n([\s\S]*?)\n<\/run-result>/.exec(text)?.[1] ?? ''
-    const line = `${name} ${state === 'idle' ? 'finished' : state || 'stopped'} · ${id}${account ? ` on ${account}` : ''}`
-    return (
-      <Box flexDirection="column">
-        {state === 'idle' ? <Text dimColor>✓ {line}</Text> : <Text color="red">✗ {line}</Text>}
-        {result && result !== '(no result)' && <Markdown text={clean(result)} />}
-      </Box>
-    )
+    const known = await read($, runs)
+    const rows = notices.map(notice => {
+      const id = /^claude-proxy run (\S+)/.exec(notice)?.[1] ?? ''
+      const name = known.find(r => r.id === id)?.name ?? `Run ${id}`
+      const header = notice.split('\n', 1)[0] ?? ''
+      if (/ is waiting for an answer/.test(header)) {
+        const ask = /\n- (.+)/.exec(notice)?.[1] ?? ''
+        return <Text color="yellow">? {name} needs an answer{ask ? ` · ${ask.slice(0, 200)}` : ''}</Text>
+      }
+      const [, state = '', account = ''] = / is (idle|failed|killed) on (\S+)/.exec(header) ?? []
+      const result = /<run-result>\n([\s\S]*?)\n<\/run-result>/.exec(notice)?.[1] ?? ''
+      const line = `${name} ${state === 'idle' ? 'finished' : state || 'stopped'} · ${id}${account ? ` on ${account}` : ''}`
+      return (
+        <Box flexDirection="column">
+          {state === 'idle' ? <Text dimColor>✓ {line}</Text> : <Text color="red">✗ {line}</Text>}
+          {result && result !== '(no result)' && <Markdown text={clean(result)} />}
+        </Box>
+      )
+    })
+    return rows.length === 1 && rows[0] ? rows[0] : <Box flexDirection="column" gap={1}>{rows}</Box>
   })
 
   on('command.run', { command: 'runs' }, async ($, e) => {

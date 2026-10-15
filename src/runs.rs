@@ -358,8 +358,18 @@ fn spawn_drainer(id: &str) -> Result<(), String> {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
-        // Its own process group, so it survives the caller's terminal.
-        cmd.arg0("claude-proxy").process_group(0);
+        cmd.arg0("claude-proxy");
+        // A session of its own, so neither the terminal nor the app that
+        // started it (closing Claude Desktop) takes the run down.
+        // SAFETY: setsid is async-signal-safe and acts on the child alone.
+        unsafe {
+            cmd.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
     }
     cmd.spawn()
         .map(|_| ())

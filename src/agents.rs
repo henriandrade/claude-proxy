@@ -517,6 +517,37 @@ pub fn attach(id: &str) -> Result<i32, String> {
     runs::attach(id)
 }
 
+pub fn news(as_json: bool, peek: bool, ack: &[String]) -> Result<i32, String> {
+    let session = std::env::var("CLAUDE_CODE_SESSION_ID")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .ok_or("news needs CLAUDE_CODE_SESSION_ID; run it from inside Claude Code")?;
+    if !ack.is_empty() {
+        crate::hook::acknowledge(&session, ack);
+        return Ok(0);
+    }
+    let news = crate::hook::untold(&session, true, !peek);
+    if as_json {
+        let rows: Vec<_> = news
+            .iter()
+            .map(|n| {
+                let mut row = status_json(&n.meta);
+                row["mark"] = n.mark.clone().into();
+                row
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string(&rows).unwrap_or_else(|_| "[]".into())
+        );
+    } else {
+        for n in &news {
+            println!("{} {}", n.meta.id, n.state.as_str());
+        }
+    }
+    Ok(0)
+}
+
 /// One line per state change, for a Monitor tool. `mine`: the runs the calling
 /// Claude session started, and what they started.
 pub fn events(ids: &[String], mine: bool) -> Result<i32, String> {

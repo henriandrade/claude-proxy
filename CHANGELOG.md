@@ -13,6 +13,14 @@ has its own version and first shipped in 0.8.0.
 
 ### Added
 
+- `claude-proxy news [--json]`: what this Claude session's runs did that it was
+  not told yet, each finished turn and each question once, kept on disk.
+- A session reopened after Claude was closed hears what its runs did
+  meanwhile: the plugin's session-start hook lists finished runs, and the
+  proxy-runs mod shows them (a notice and the status line) and hands their
+  details to Claude with the next message. Nothing counts as told before it
+  reached the session (`news --peek`, then `--ack`).
+
 - `claude-proxy exclude-auto <name>` / `include-auto <name>`, and
   `add <name> --no-auto`: keep an account (or the primary `claude`) out of
   `auto`, a run's default pool and its failover. Naming it still uses it.
@@ -34,6 +42,11 @@ has its own version and first shipped in 0.8.0.
 
 ### Changed
 
+- A run's background process starts in a session of its own (`setsid`), so
+  closing the terminal or Claude Desktop that started it does not stop it.
+- proxy-runs mod: notifications cover every run the session started (also
+  through Bash) and come from `claude-proxy news`; several at once arrive as
+  one message.
 - `allow --always` refuses Bash commands containing `*`, `(` or `)` and points
   to `--rule`. Nothing is granted and the ask stays pending.
 - `allow --always` on WebFetch records the bare host.

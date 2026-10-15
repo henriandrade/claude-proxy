@@ -25,6 +25,8 @@ const ok = (stdout: string): { value: ProcessRunResult } => ({
 })
 
 type World = {
+  news: object[] | null
+  newsEnv: (Record<string, string> | undefined)[]
   argvs: string[][]
   stdins: (string | undefined)[]
   status: object
@@ -72,11 +74,15 @@ const EVENTS_JSONL = [
   .map(e => JSON.stringify(e))
   .join('\n')
 
+let asked = () => {}
+
 function world(on: On, events: string[] = [], env: Record<string, string> = {}): World {
   const w: World = {
     argvs: [],
     stdins: [],
     status: RUN,
+    news: null,
+    newsEnv: [],
     list: [],
     events,
     tools: [],
@@ -119,6 +125,15 @@ function world(on: On, events: string[] = [], env: Record<string, string> = {}):
     }
     if (cmd === 'run' || cmd === 'status') return ok(JSON.stringify(w.status))
     if (cmd === 'runs') return ok(JSON.stringify(w.list))
+    if (cmd === 'news' && e.argv[2] === '--ack') return ok('')
+    if (cmd === 'news') {
+      w.newsEnv.push(e.init?.env as Record<string, string> | undefined)
+      asked()
+      if (w.news === null) {
+        return { value: { exitCode: 2, stdout: '', stderr: "unrecognized subcommand 'news'", isStdoutTruncated: false, isStderrTruncated: false } }
+      }
+      return ok(JSON.stringify(w.news))
+    }
     if (cmd === 'read') return ok(EVENTS_JSONL)
     return ok(`${cmd} done`)
   })
@@ -553,4 +568,40 @@ test('without process access the marker is turned off instead', async ($, on) =>
   w.noProcess = true
   await $.session.end({ reason: 'other', sessionId: SESSION } as never)
   expect(w.files[MARKER]).toBe('off')
+})
+
+test('a reopened session is shown what its runs did, and the next prompt brings it to Claude', async ($, on) => {
+  const w = world(on)
+  const entered: { text: string; context?: readonly string[] }[] = []
+  on('prompt.submit', ($, e) => (entered.push({ text: e.text, context: e.context }), { text: e.text, context: e.context }) as never)
+  w.news = [
+    { ...RUN, state: 'idle', last_result: { text: 'all green', ok: true }, mark: 'abc123 idle 1' },
+    { ...RUN, id: 'def456', name: 'tidy', state: 'waiting', asks: [{ tool: 'Bash', input: { command: 'rm x' } }], mark: 'def456 waiting k1' },
+  ]
+  await start($)
+  for (let i = 0; i < 200 && !w.statuses.includes('2 runs finished while closed'); i++) await Promise.resolve()
+  expect(w.statuses).toContain('2 runs finished while closed')
+  expect(entered).toHaveLength(0)
+  expect(w.argvs.some(a => a[2] === '--ack')).toBe(false)
+
+  await $.prompt.submit({ text: 'what happened?', origin: { kind: 'composer' }, wait: false } as never)
+  expect(entered.at(-1)?.text).toBe('what happened?')
+  const context = entered.at(-1)?.context?.join('\n') ?? ''
+  expect(context).toContain('abc123 (say ok) is idle')
+  expect(context).toContain('all green')
+  expect(context).toContain('def456 (tidy) is waiting for an answer')
+  expect(w.argvs.find(a => a[2] === '--ack')).toEqual(['claude-proxy', 'news', '--ack', 'abc123 idle 1', 'def456 waiting k1'])
+})
+
+test('with nothing new, a reopened session is not woken', async ($, on) => {
+  const w = world(on)
+  const submitted: string[] = []
+  on('prompt.submit', ($, e) => (submitted.push(e.text), { text: e.text, context: e.context }) as never)
+  w.news = []
+  const newsAsked = new Promise<void>(resolve => (asked = resolve))
+  await start($)
+  await newsAsked
+  for (let i = 0; i < 50; i++) await Promise.resolve()
+  expect(w.newsEnv).toHaveLength(1)
+  expect(submitted).toHaveLength(0)
 })
