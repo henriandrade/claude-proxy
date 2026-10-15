@@ -219,7 +219,7 @@ $ claude-proxy watch $id
 | `claude-proxy kill <id>` | stop the current turn (the conversation is kept; `send` resumes it); on an idle run, free its Claude process |
 | `claude-proxy runs` / `rm <id>` | this repository's runs, as a tree of who started what (`--all` for every run) / delete one and its clean worktree |
 | `claude-proxy events [<id>…] [--mine]` | a line each time a run finishes, fails, asks or moves account; made for a Monitor tool |
-| `claude-proxy news [--json]` | what this Claude session's runs did that it has not been told yet (each finished turn and each question once); marks them told |
+| `claude-proxy news [--json]` | what this Claude session's runs did that it has not been told yet (each finished turn and each question once); marks them told, or with `--peek` leaves that to `--ack <mark>…` once delivered |
 
 Each run pins one Claude session, so the conversation carries over across
 Claude processes and onto other accounts, since transcripts are shared. A

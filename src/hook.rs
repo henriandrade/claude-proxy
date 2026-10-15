@@ -111,7 +111,16 @@ fn first_ask(m: &Meta) -> String {
 /// turn once, and a run waiting for an answer every time, or once per question
 /// with `waiting_once`. The marks live on disk, so a session reopened after
 /// Claude was closed still hears what happened meanwhile.
-pub(crate) fn untold(session: &str, waiting_once: bool) -> Vec<(Meta, State)> {
+pub(crate) struct News {
+    pub meta: Meta,
+    pub state: State,
+    /// What `acknowledge` records once this was delivered.
+    pub mark: String,
+}
+
+/// With `record` false the caller delivers first and then `acknowledge`s, so
+/// news a session never got to see stays untold.
+pub(crate) fn untold(session: &str, waiting_once: bool, record: bool) -> Vec<News> {
     if !crate::paths::valid_id(session) {
         return Vec::new();
     }
@@ -141,20 +150,51 @@ pub(crate) fn untold(session: &str, waiting_once: bool) -> Vec<(Meta, State)> {
                 _ => return None,
             };
             let new = !told.lines().any(|l| l == mark);
-            now_told.push(mark);
-            ((new && !first) || (state == State::Waiting && !waiting_once)).then_some((m, state))
+            now_told.push(mark.clone());
+            ((new && !first) || (state == State::Waiting && !waiting_once)).then_some(News {
+                meta: m,
+                state,
+                mark,
+            })
         })
         .collect();
-    let dir = config_dir().join("sessions");
-    let _ = crate::paths::private_dir(&dir).and_then(|()| {
-        crate::paths::write_atomic(&told_file, now_told.join("\n").as_bytes(), 0o600)
-    });
+    if record || first {
+        save_told(&told_file, &now_told);
+    }
     news
 }
 
-fn news_lines(news: &[(Meta, State)]) -> Vec<String> {
+/// Record news a caller of `untold(…, record: false)` has now delivered.
+pub(crate) fn acknowledge(session: &str, marks: &[String]) {
+    if !crate::paths::valid_id(session) {
+        return;
+    }
+    let told_file = config_dir()
+        .join("sessions")
+        .join(format!("{session}.told"));
+    let mut told: Vec<String> = fs::read_to_string(&told_file)
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect();
+    for mark in marks {
+        if !told.contains(mark) {
+            told.push(mark.clone());
+        }
+    }
+    save_told(&told_file, &told);
+}
+
+fn save_told(told_file: &Path, marks: &[String]) {
+    let _ = told_file
+        .parent()
+        .map_or(Ok(()), crate::paths::private_dir)
+        .and_then(|()| crate::paths::write_atomic(told_file, marks.join("\n").as_bytes(), 0o600));
+}
+
+fn news_lines(news: &[News]) -> Vec<String> {
     news.iter()
-        .map(|(m, state)| match state {
+        .map(|News { meta: m, state, .. }| match state {
             State::Waiting => format!("- {} is waiting for an answer: {}", label(m), first_ask(m)),
             s => format!(
                 "- {} is {} — `claude-proxy result {}`",
@@ -167,7 +207,7 @@ fn news_lines(news: &[(Meta, State)]) -> Vec<String> {
 }
 
 fn news_since_last_prompt(session: &str) -> Option<String> {
-    let lines = news_lines(&untold(session, false));
+    let lines = news_lines(&untold(session, false, true));
     (!lines.is_empty()).then(|| {
         format!(
             "claude-proxy: runs this session started, since your last message:\n{}",
@@ -178,9 +218,9 @@ fn news_since_last_prompt(session: &str) -> Option<String> {
 
 /// Waiting runs are left to the still-going list, which names them anyway.
 fn finished_while_away(session: &str) -> Option<String> {
-    let finished: Vec<_> = untold(session, true)
+    let finished: Vec<_> = untold(session, true, true)
         .into_iter()
-        .filter(|(_, state)| *state != State::Waiting)
+        .filter(|n| n.state != State::Waiting)
         .collect();
     let lines = news_lines(&finished);
     (!lines.is_empty()).then(|| {

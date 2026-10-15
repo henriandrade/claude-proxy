@@ -1692,3 +1692,43 @@ fn a_session_from_before_records_is_not_retold_its_old_runs() {
         serde_json::from_str(&stdout(&run_as(&env, exe, &["news", "--json"], &mine))).unwrap();
     assert_eq!(later.len(), 1, "{later:?}");
 }
+
+#[test]
+fn peeked_news_stays_untold_until_it_is_acknowledged() {
+    let env = setup();
+    let exe = Path::new(env!("CARGO_BIN_EXE_claude-proxy"));
+    let mine = [(
+        "CLAUDE_CODE_SESSION_ID",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    )];
+    let peek = || -> Vec<Value> {
+        serde_json::from_str(&stdout(&run_as(
+            &env,
+            exe,
+            &["news", "--json", "--peek"],
+            &mine,
+        )))
+        .unwrap()
+    };
+    assert!(peek().is_empty());
+    let id = stdout(&run_as(
+        &env,
+        exe,
+        &["run", "--account", "claude", "hi"],
+        &mine,
+    ));
+    cp(&env, &["wait", &id, "--timeout", "30"]);
+    settled(&env, &id);
+    let first = peek();
+    assert_eq!(first.len(), 1, "{first:?}");
+    let mark = first[0]["mark"].as_str().unwrap().to_string();
+    assert_eq!(mark, format!("{id} idle 1"));
+    assert_eq!(
+        peek().len(),
+        1,
+        "a session that never saw it hears it again"
+    );
+    let acked = run_as(&env, exe, &["news", "--ack", &mark], &mine);
+    assert_eq!(acked.status.code(), Some(0));
+    assert!(peek().is_empty());
+}

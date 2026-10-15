@@ -125,6 +125,7 @@ function world(on: On, events: string[] = [], env: Record<string, string> = {}):
     }
     if (cmd === 'run' || cmd === 'status') return ok(JSON.stringify(w.status))
     if (cmd === 'runs') return ok(JSON.stringify(w.list))
+    if (cmd === 'news' && e.argv[2] === '--ack') return ok('')
     if (cmd === 'news') {
       w.newsEnv.push(e.init?.env as Record<string, string> | undefined)
       asked()
@@ -576,8 +577,8 @@ test('a reopened session hears in one prompt what its runs did while it was clos
   const prompted = new Promise<void>(resolve => (woke = resolve))
   on('prompt.submit', ($, e) => (submitted.push(e.text), woke(), { text: e.text }) as never)
   w.news = [
-    { ...RUN, state: 'idle', last_result: { text: 'all green', ok: true } },
-    { ...RUN, id: 'def456', name: 'tidy', state: 'waiting', asks: [{ tool: 'Bash', input: { command: 'rm x' } }] },
+    { ...RUN, state: 'idle', last_result: { text: 'all green', ok: true }, mark: 'abc123 idle 1' },
+    { ...RUN, id: 'def456', name: 'tidy', state: 'waiting', asks: [{ tool: 'Bash', input: { command: 'rm x' } }], mark: 'def456 waiting k1' },
   ]
   await start($)
   await prompted
@@ -586,6 +587,9 @@ test('a reopened session hears in one prompt what its runs did while it was clos
   expect(submitted[0]).toContain('abc123 (say ok) is idle')
   expect(submitted[0]).toContain('all green')
   expect(submitted[0]).toContain('def456 (tidy) is waiting for an answer')
+  for (let i = 0; i < 50; i++) await Promise.resolve()
+  expect(w.argvs.find(a => a[1] === 'news' && a[2] === '--json')).toEqual(['claude-proxy', 'news', '--json', '--peek'])
+  expect(w.argvs.find(a => a[2] === '--ack')).toEqual(['claude-proxy', 'news', '--ack', 'abc123 idle 1', 'def456 waiting k1'])
 
   const ui = await $.ui.mount({
     plugin: 'proxy-runs',

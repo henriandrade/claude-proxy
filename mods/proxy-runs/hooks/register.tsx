@@ -262,15 +262,27 @@ async function tell($: Engine, news: ProxyRunsRun[]): Promise<void> {
   })
 }
 
+const delivered = new Set<string>()
+
 // `claude-proxy news` keeps what was told on disk, shared with quota-router's
 // hooks, so runs that finished while Claude was closed are told on reopening.
-// False when it cannot answer (no process access, an older claude-proxy).
+// Marked told only once the prompt carrying it starts a turn: a session that
+// ends first (`claude -p`) hears it next time. False when it cannot answer
+// (no process access, an older claude-proxy).
 async function tellNews($: Engine): Promise<boolean> {
-  const out = await cli($, ['news', '--json'], { env: { CLAUDE_CODE_SESSION_ID: await $.session.id() } })
+  const env = { CLAUDE_CODE_SESSION_ID: await $.session.id() }
+  const out = await cli($, ['news', '--json', '--peek'], { env })
   if (out?.exitCode !== 0) return false
-  const news = (JSON.parse(out.stdout) as ProxyRunsRun[]).filter(r => validId(r.id))
-  for (const run of news) await update($, runs, all => [...all.filter(r => r.id !== run.id), run])
+  const news = (JSON.parse(out.stdout) as (ProxyRunsRun & { mark: string })[]).filter(
+    r => validId(r.id) && typeof r.mark === 'string' && !delivered.has(r.mark),
+  )
+  if (news.length === 0) return true
+  for (const run of news) {
+    delivered.add(run.mark)
+    await update($, runs, all => [...all.filter(r => r.id !== run.id), run])
+  }
   await tell($, news)
+  await cli($, ['news', '--ack', ...news.map(r => r.mark)], { env })
   return true
 }
 
