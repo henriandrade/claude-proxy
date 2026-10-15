@@ -11,6 +11,8 @@ has its own version and first shipped in 0.8.0.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-15
+
 ### Added
 
 - `claude-proxy news [--json]`: what this Claude session's runs did that it was
@@ -277,6 +279,7 @@ Plugin only.
   `remove`; quota from the OAuth usage endpoint; hermetic tests.
 
 [Unreleased]: https://github.com/ohmaseclaro/claude-proxy/compare/2509d53...main
+[0.9.0]: https://github.com/ohmaseclaro/claude-proxy/commit/8b6cda7
 [0.8.1]: https://github.com/ohmaseclaro/claude-proxy/commit/2509d53
 [0.8.0]: https://github.com/ohmaseclaro/claude-proxy/commit/90cc411
 [0.7.0]: https://github.com/ohmaseclaro/claude-proxy/commit/c7225d0
