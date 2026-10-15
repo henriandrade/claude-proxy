@@ -27,6 +27,9 @@ enum Command {
     Add {
         /// The command name to create (e.g. `claude-personal`).
         label: String,
+        /// Keep it out of `auto`: only used when named.
+        #[arg(long)]
+        no_auto: bool,
     },
     /// List every account with its remaining quota (cached for 15 minutes).
     List {
@@ -43,6 +46,17 @@ enum Command {
     Auto {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<OsString>,
+    },
+    /// Keep an account out of `auto` (picking, a run's default pool, failover).
+    /// Naming it still uses it: its own command, or `run --account <name>`.
+    ExcludeAuto {
+        /// The account, or `claude` for the primary login.
+        label: String,
+    },
+    /// Let `auto` use an account again.
+    IncludeAuto {
+        /// The account, or `claude` for the primary login.
+        label: String,
     },
     /// Remove a proxy's command (its profile and login are kept).
     Remove {
@@ -227,7 +241,9 @@ pub fn main() -> i32 {
 
 fn dispatch(command: Command) -> Result<i32, String> {
     match command {
-        Command::Add { label } => add_cmd(&label),
+        Command::Add { label, no_auto } => add_cmd(&label, no_auto),
+        Command::ExcludeAuto { label } => set_auto_cmd(&label, false),
+        Command::IncludeAuto { label } => set_auto_cmd(&label, true),
         Command::List { json, refresh } => list_cmd(json, refresh),
         Command::Auto { args } => auto_cmd(&args),
         Command::Remove { label } => remove_cmd(&label),
@@ -309,17 +325,55 @@ fn dispatch(command: Command) -> Result<i32, String> {
     }
 }
 
-fn add_cmd(label: &str) -> Result<i32, String> {
+pub(crate) const NO_AUTO_ACCOUNT: &str = "no logged-in account for auto to use. Add one with:  \
+     claude-proxy add <name>, or let one back in with:  claude-proxy include-auto <name>";
+
+fn set_auto_cmd(label: &str, on: bool) -> Result<i32, String> {
+    let mut registry = Registry::load();
+    if label != quota::PRIMARY_LABEL && !registry.has(label) {
+        return Err(format!(
+            "no account named {label:?}. See:  claude-proxy list"
+        ));
+    }
+    registry.set_in_auto(label, on);
+    registry
+        .save()
+        .map_err(|e| format!("could not update the registry: {e}"))?;
+    if on {
+        println!("{label} is back in auto.");
+    } else {
+        println!(
+            "{label} is out of auto. It still runs when named: `{label}`, or \
+             `claude-proxy run --account {label}`."
+        );
+    }
+    Ok(0)
+}
+
+fn add_cmd(label: &str, no_auto: bool) -> Result<i32, String> {
     let self_exe = std::env::current_exe()
         .map_err(|e| format!("could not locate this binary to install: {e}"))?;
     let bin_dir = install::default_bin_dir();
     let interactive = std::io::stdin().is_terminal();
 
     let added = crate::add::run(&self_exe, &bin_dir, label, interactive)?;
+    if no_auto {
+        let mut registry = Registry::load();
+        registry.set_in_auto(&added.label, false);
+        registry
+            .save()
+            .map_err(|e| format!("could not update the registry: {e}"))?;
+    }
 
     println!("\n✓ {} is ready.", added.label);
     println!("  installed: {}", added.bin_path.display());
     println!("  run it:    {} [any claude arguments]", added.label);
+    if no_auto {
+        println!(
+            "  auto:      left out (`claude-proxy include-auto {}` to change)",
+            added.label
+        );
+    }
     if !added.on_path {
         println!(
             "\nNote: {} is not on your PATH. Add it to use the command directly:",
@@ -331,9 +385,10 @@ fn add_cmd(label: &str) -> Result<i32, String> {
 }
 
 fn list_cmd(as_json: bool, refresh: bool) -> Result<i32, String> {
+    let registry = Registry::load();
     let reports = quota::reports(&quota::accounts(), refresh);
     let now = quota::now_secs();
-    let pick = quota::choose(&reports, now);
+    let pick = quota::choose_among(&reports, now, |r| registry.in_auto(&r.label));
 
     if as_json {
         let accounts: Vec<_> = reports
@@ -344,6 +399,7 @@ fn list_cmd(as_json: bool, refresh: bool) -> Result<i32, String> {
                     "primary": r.primary,
                     "email": r.email,
                     "logged_in": r.logged_in,
+                    "auto": registry.in_auto(&r.label),
                     "pressure": r.pressure(now),
                     "windows": r.windows.iter().map(|w| json!({
                         "name": w.name,
@@ -380,6 +436,9 @@ fn list_cmd(as_json: bool, refresh: bool) -> Result<i32, String> {
             r.email.as_deref().unwrap_or("-"),
             quota_text(r, now),
         );
+        if !registry.in_auto(&r.label) {
+            line.push_str("  (not in auto)");
+        }
         if !r.primary && !bin_dir.join(&r.label).exists() {
             line.push_str("  (command missing — `claude-proxy add` to reinstall)");
         }
@@ -394,10 +453,9 @@ fn list_cmd(as_json: bool, refresh: bool) -> Result<i32, String> {
 }
 
 fn auto_cmd(args: &[OsString]) -> Result<i32, String> {
-    let reports = quota::reports(&quota::accounts(), false);
+    let reports = quota::reports(&quota::auto_accounts(), false);
     let now = quota::now_secs();
-    let pick = quota::choose(&reports, now)
-        .ok_or("no logged-in account to use. Add one with:  claude-proxy add <name>")?;
+    let pick = quota::choose(&reports, now).ok_or(NO_AUTO_ACCOUNT)?;
     let r = &reports[pick];
     eprintln!("claude-proxy: auto → {} ({})", r.label, quota_text(r, now));
     if r.pressure(now).is_some_and(|p| p >= 100.0) {

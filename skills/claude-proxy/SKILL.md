@@ -78,7 +78,7 @@ long task on stdin: `claude-proxy run - <<'CLAUDE_PROXY_TASK' … CLAUDE_PROXY_T
 | `--fork` | start from a copy of *your own* conversation (`--fork-from <session-id>` for another one). Costly: the whole context is re-read, with no prompt cache on another account. Use only when the task truly needs what you know |
 | `--cwd <dir>` | work somewhere else |
 | `--name <label>` | easy to spot in `claude-proxy runs` |
-| `--account …` | `auto` (default: best quota, fails over), a name to pin, `a,b` in order. Pin only when the user asked |
+| `--account …` | `auto` (default: best quota, fails over), a name to pin, `a,b` in order. Pin only when the user asked. `auto` skips accounts the user left out (`list` shows `(not in auto)`); never name one of those unless the user asked for it |
 | `--wait` | block and print the answer in one step |
 | `-- <claude flags>` | anything else for `claude`: `--model`, `--permission-mode`, `--allowedTools`, … |
 

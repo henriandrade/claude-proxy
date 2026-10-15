@@ -1490,3 +1490,52 @@ fn pruning_spares_queued_messages_live_children_and_kept_worktrees() {
     }
     cp(&env, &["kill", &child]);
 }
+
+fn registry(env: &Env) -> Value {
+    serde_json::from_str(
+        &std::fs::read_to_string(env.home.join(".config/claude-proxy/registry.json")).unwrap(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn an_account_left_out_of_auto_stays_out_until_it_is_let_back_in() {
+    let env = setup();
+    let out = cp(&env, &["exclude-auto", "acct-b"]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(stdout(&out).contains("acct-b is out of auto"));
+    assert_eq!(cp(&env, &["exclude-auto", "claude"]).status.code(), Some(0));
+    assert_eq!(
+        registry(&env)["not_auto"],
+        serde_json::json!(["acct-b", "claude"])
+    );
+
+    let unknown = cp(&env, &["exclude-auto", "nope"]);
+    assert_eq!(unknown.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&unknown.stderr).contains("no account named \"nope\""));
+
+    cp(&env, &["include-auto", "acct-b"]);
+    cp(&env, &["include-auto", "claude"]);
+    assert!(
+        registry(&env).get("not_auto").is_none(),
+        "{}",
+        registry(&env)
+    );
+}
+
+#[test]
+fn naming_an_account_left_out_of_auto_still_runs_on_it() {
+    let env = setup();
+    cp(&env, &["exclude-auto", "acct-a"]);
+    let id = stdout(&cp(&env, &["run", "--account", "acct-a", "hello"]));
+    assert_eq!(
+        cp(&env, &["wait", &id, "--timeout", "30"]).status.code(),
+        Some(0)
+    );
+    assert_eq!(status(&env, &id)["account"], "acct-a");
+}

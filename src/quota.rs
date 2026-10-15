@@ -44,6 +44,15 @@ pub fn accounts() -> Vec<Account> {
     all
 }
 
+/// The accounts `auto` may pick: every one but those excluded from it.
+pub fn auto_accounts() -> Vec<Account> {
+    let registry = Registry::load();
+    accounts()
+        .into_iter()
+        .filter(|a| registry.in_auto(&a.label))
+        .collect()
+}
+
 /// `used` is a percentage, 0–100.
 pub struct Window {
     pub name: String,
@@ -86,6 +95,11 @@ pub fn pressure(windows: &[Window], now: i64) -> Option<f64> {
 }
 
 pub fn choose(reports: &[Report], now: i64) -> Option<usize> {
+    choose_among(reports, now, |_| true)
+}
+
+/// The best of the reports `keep` accepts, as an index into all of them.
+pub fn choose_among(reports: &[Report], now: i64, keep: impl Fn(&Report) -> bool) -> Option<usize> {
     let rank = |r: &Report| match r.pressure(now) {
         Some(p) => (0u8, p, weekly_used(r, now)),
         None => (1u8, 0.0, 0.0),
@@ -93,7 +107,7 @@ pub fn choose(reports: &[Report], now: i64) -> Option<usize> {
     reports
         .iter()
         .enumerate()
-        .filter(|(_, r)| r.logged_in)
+        .filter(|(_, r)| r.logged_in && keep(r))
         .min_by(|(_, a), (_, b)| rank(a).partial_cmp(&rank(b)).unwrap_or(Ordering::Equal))
         .map(|(i, _)| i)
 }
@@ -630,6 +644,17 @@ mod tests {
         ];
         assert_eq!(pressure(&ws, now), Some(40.0));
         assert_eq!(pressure(&[], now), None);
+    }
+
+    #[test]
+    fn choose_among_skips_what_it_leaves_out_and_indexes_into_all() {
+        let reports = vec![
+            report("roomy", true, vec![window("5h", 5.0, None)]),
+            report("busy", true, vec![window("5h", 80.0, None)]),
+        ];
+        assert_eq!(choose(&reports, 0), Some(0));
+        assert_eq!(choose_among(&reports, 0, |r| r.label != "roomy"), Some(1));
+        assert_eq!(choose_among(&reports, 0, |_| false), None);
     }
 
     #[test]

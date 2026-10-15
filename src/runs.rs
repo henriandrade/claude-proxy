@@ -412,7 +412,7 @@ pub(crate) fn next_account(meta: &Meta, tried: &[String]) -> Option<String> {
     match meta.pool.as_slice() {
         [_] => None,
         [] => {
-            let candidates: Vec<_> = quota::accounts()
+            let candidates: Vec<_> = quota::auto_accounts()
                 .into_iter()
                 .filter(|a| !tried.contains(&a.label))
                 .collect();
@@ -455,10 +455,10 @@ pub fn first_account(pool: &[String]) -> Result<String, String> {
     if let Some(first) = pool.first() {
         return Ok(first.clone());
     }
-    let reports = quota::reports(&quota::accounts(), false);
+    let reports = quota::reports(&quota::auto_accounts(), false);
     quota::choose(&reports, now_secs())
         .map(|i| reports[i].label.clone())
-        .ok_or_else(|| "no logged-in account to use. Add one with:  claude-proxy add <name>".into())
+        .ok_or_else(|| crate::cli::NO_AUTO_ACCOUNT.into())
 }
 
 fn session_file(meta: &Meta) -> Option<PathBuf> {
