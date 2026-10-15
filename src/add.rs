@@ -1,11 +1,5 @@
-//! `claude-proxy add <label>` — create an isolated Claude profile, log it in,
-//! and install it as a command.
-//!
-//! The account lives in its own `CLAUDE_CONFIG_DIR` under
-//! `~/.config/claude-proxy/accounts/<label>`. We spawn Claude's own login there,
-//! so Claude mints and stores its own credentials for that profile (and refreshes
-//! them itself); claude-proxy never handles the token. Afterwards the profile is
-//! fully independent of the primary `~/.claude` login and of other proxies.
+//! Claude's own login runs in the new profile and stores its own credentials;
+//! claude-proxy never handles the token.
 
 use std::path::Path;
 use std::process::Command;
@@ -14,15 +8,12 @@ use crate::install;
 use crate::paths::account_config_dir;
 use crate::registry::{valid_label, Registry};
 
-/// Outcome of a successful add, for the caller to report.
 pub struct Added {
     pub label: String,
     pub bin_path: std::path::PathBuf,
     pub on_path: bool,
 }
 
-/// Run the whole add flow. `self_exe` is this binary (to copy), `bin_dir` the
-/// install target, `interactive` whether a terminal is attached for the login.
 pub fn run(
     self_exe: &Path,
     bin_dir: &Path,
@@ -49,7 +40,7 @@ pub fn run(
     }
 
     let dir = account_config_dir(label);
-    std::fs::create_dir_all(&dir)
+    crate::paths::private_dir(&dir)
         .map_err(|e| format!("could not create the profile dir for {label:?}: {e}"))?;
     crate::shared::link_shared(&dir);
     seed_profile(&dir);
@@ -58,8 +49,7 @@ pub fn run(
     eprintln!("Log in with the account you want {label:?} to use (its own browser session),");
     eprintln!("then type /exit (or press Ctrl-C) to finish.\n");
 
-    // Claude runs in the account's own profile dir and does its own login. We
-    // clear any inherited credential so it cannot short-circuit the login.
+    // An inherited credential would short-circuit the login.
     let status = Command::new("claude")
         .env("CLAUDE_CONFIG_DIR", &dir)
         .env_remove("CLAUDE_CODE_OAUTH_TOKEN")
@@ -73,7 +63,7 @@ pub fn run(
                 format!("could not run `claude`: {e}")
             }
         })?;
-    // A Ctrl-C exit is expected and fine; the login is verified below regardless.
+    // A Ctrl-C exit is fine; the login is verified below.
     let _ = status;
 
     if !profile_is_logged_in(&dir) {
@@ -97,8 +87,6 @@ pub fn run(
     })
 }
 
-/// Whether the profile holds a completed login, checked without a network call:
-/// Claude records the authenticated account in the profile's `.claude.json`.
 fn profile_is_logged_in(dir: &Path) -> bool {
     let text = match std::fs::read_to_string(dir.join(".claude.json")) {
         Ok(t) => t,
@@ -115,9 +103,7 @@ fn profile_is_logged_in(dir: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Pre-fill a couple of Claude's first-run preferences so the sign-in is not
-/// preceded by the theme/onboarding prompt. Best-effort: if it fails, Claude
-/// just shows its normal first-run screen.
+/// Skips the theme/onboarding prompt before sign-in. Best-effort.
 fn seed_profile(dir: &Path) {
     let path = dir.join(".claude.json");
     if path.exists() {
@@ -139,12 +125,9 @@ mod tests {
     #[test]
     fn logged_in_only_when_an_account_uuid_is_present() {
         let dir = tempfile::tempdir().unwrap();
-        // No file yet.
         assert!(!profile_is_logged_in(dir.path()));
-        // Onboarding-only, no account.
         std::fs::write(dir.path().join(".claude.json"), r#"{"theme":"dark"}"#).unwrap();
         assert!(!profile_is_logged_in(dir.path()));
-        // A completed login records the account.
         std::fs::write(
             dir.path().join(".claude.json"),
             r#"{"oauthAccount":{"accountUuid":"abc-123"}}"#,

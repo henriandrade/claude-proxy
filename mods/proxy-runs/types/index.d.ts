@@ -11,7 +11,6 @@ export type ProxyRunsRun = {
   session: string | null
 }
 
-/** One tool call a run made, with its result once it has one. */
 export type RunTool = {
   kind: 'tool'
   id: string
@@ -25,7 +24,6 @@ export type RunTool = {
   isErrored: boolean
 }
 
-/** One thing a run's transcript shows, parsed from its stream-json events. */
 export type RunItem =
   | { kind: 'you'; text: string; duringTurn: boolean }
   | { kind: 'text'; text: string }

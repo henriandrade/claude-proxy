@@ -1,24 +1,13 @@
-//! Running as a proxy: become `claude` for one account.
-//!
-//! When the binary is invoked under a proxy name (via `argv[0]`), it points
-//! `claude` at that account's own config directory and hands off with every
-//! argument untouched.
-//!
-//! The dedicated config dir is the whole mechanism. Claude keys its login and
-//! identity off `CLAUDE_CONFIG_DIR` (on macOS the credential item is derived
-//! from the dir), so each proxy logs in once, as its own account, and is
-//! unaffected by the primary `~/.claude` login or by other proxies. Any
-//! inherited credential or host identity is cleared so it cannot override the
-//! account.
+//! Claude keys its login and identity off `CLAUDE_CONFIG_DIR`, so the account's own dir is
+//! the whole mechanism.
 
 use std::ffi::OsString;
 use std::path::Path;
 
 use crate::paths::account_config_dir;
 
-/// Set by a host app (Claude Desktop, the Agent SDK) for its own Claude
-/// session. Inherited, they would tie the account's Claude to that session's
-/// identity.
+/// Credentials and a host app's (Claude Desktop, the Agent SDK) session identity; inherited,
+/// they would tie the account's Claude to that identity.
 const HOST_SESSION_VARS: &[&str] = &[
     "CLAUDE_CODE_OAUTH_TOKEN",
     "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
@@ -35,20 +24,13 @@ const HOST_SESSION_VARS: &[&str] = &[
     "CLAUDE_CODE_SESSION_ID",
 ];
 
-/// The environment `claude` sees under a proxy, as (key, value|unset) pairs.
-///
-/// Pure, so the policy is testable without spawning anything:
-/// - `CLAUDE_CONFIG_DIR` points at the account's own dir (or is unset for the
-///   primary profile — it may be inherited when `auto` runs inside a proxy
-///   session), isolating login and identity from every other account;
-/// - inherited credentials (`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, …)
-///   and a host app's session identity are unset, because any of them would
-///   override the account's own stored login and silently use the wrong one.
 pub enum EnvOp {
     Set(&'static str, String),
     Unset(&'static str),
 }
 
+/// Inherited credentials are unset: they would silently override the account's own login.
+/// The primary unsets `CLAUDE_CONFIG_DIR`, inherited when `auto` runs inside a proxy session.
 pub fn proxy_env(config_dir: Option<&str>) -> Vec<EnvOp> {
     let mut ops = vec![match config_dir {
         Some(dir) => EnvOp::Set("CLAUDE_CONFIG_DIR", dir.to_string()),
@@ -58,8 +40,6 @@ pub fn proxy_env(config_dir: Option<&str>) -> Vec<EnvOp> {
     ops
 }
 
-/// Run `claude` as the proxy `label`, forwarding `args`. Returns the child's
-/// exit code, or an error before the child is reached.
 pub fn run(label: &str, args: &[OsString]) -> Result<i32, String> {
     let cwd = std::env::current_dir().map_err(|e| format!("no current directory: {e}"))?;
     let mut command = interactive_command(label, &cwd)?;
@@ -67,15 +47,12 @@ pub fn run(label: &str, args: &[OsString]) -> Result<i32, String> {
     exec_or_status(command, label)
 }
 
-/// Run `claude` on the primary (`~/.claude`) profile, forwarding `args`.
 pub fn run_primary(args: &[OsString]) -> Result<i32, String> {
     let mut command = claude_command(None);
     command.args(args);
     exec_or_status(command, crate::quota::PRIMARY_LABEL)
 }
 
-/// `claude` for `label` (or the primary) as a person would start it in `cwd`:
-/// with the user's MCP servers, which a profile does not have on its own.
 pub fn interactive_command(label: &str, cwd: &Path) -> Result<std::process::Command, String> {
     if label == crate::quota::PRIMARY_LABEL {
         return Ok(claude_command(None));
@@ -94,9 +71,6 @@ pub fn interactive_command(label: &str, cwd: &Path) -> Result<std::process::Comm
     Ok(command)
 }
 
-/// A `claude` command for an account — `None` is the primary profile — with
-/// the shared setup linked, the config dir set, and inherited credentials
-/// cleared. Not yet run.
 pub fn claude_command(config_dir: Option<&Path>) -> std::process::Command {
     if let Some(dir) = config_dir {
         let _ = std::fs::create_dir_all(dir);
@@ -117,12 +91,10 @@ pub fn claude_command(config_dir: Option<&Path>) -> std::process::Command {
     command
 }
 
-/// On Unix, replace this process with `claude` so signals and the exit code
-/// pass through exactly. Elsewhere, spawn and forward the status.
+/// `exec` on Unix so signals and the exit code pass through exactly.
 #[cfg(unix)]
 fn exec_or_status(mut command: std::process::Command, _label: &str) -> Result<i32, String> {
     use std::os::unix::process::CommandExt;
-    // `exec` only returns on failure.
     let err = command.exec();
     Err(classify_spawn_error(err))
 }
@@ -169,14 +141,12 @@ mod tests {
     #[test]
     fn proxy_env_sets_the_config_dir_and_clears_inherited_credentials() {
         let (set, unset) = split(proxy_env(Some(
-            "/home/me/.config/claude-proxy/accounts/gmail",
+            "/home/me/.config/claude-proxy/accounts/personal",
         )));
         assert_eq!(
             set.get("CLAUDE_CONFIG_DIR").map(String::as_str),
-            Some("/home/me/.config/claude-proxy/accounts/gmail")
+            Some("/home/me/.config/claude-proxy/accounts/personal")
         );
-        // No credential is injected; any inherited one is cleared so the
-        // account's own stored login is what claude uses.
         for var in [
             "CLAUDE_CODE_OAUTH_TOKEN",
             "ANTHROPIC_API_KEY",

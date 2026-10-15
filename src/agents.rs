@@ -1,6 +1,4 @@
-//! The commands that manage background runs: start, list, inspect, read and
-//! follow, message, wait for, kill, and delete. The run engine is `runs`; this
-//! is the presentation on top of it.
+//! The run commands: presentation on top of the run engine in `runs`.
 
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -49,7 +47,7 @@ pub fn run(opts: RunOpts) -> Result<i32, String> {
         eprintln!("claude-proxy: inheriting your session's permission mode ({mode})");
         claude_args.extend(["--permission-mode".to_string(), mode]);
     }
-    // Started from inside a run: that run is the parent, and hears back.
+    // Set by `runs::turn_command` inside a run.
     let parent = std::env::var("CLAUDE_PROXY_RUN")
         .ok()
         .filter(|id| runs::load(id).is_ok());
@@ -92,9 +90,8 @@ pub fn run(opts: RunOpts) -> Result<i32, String> {
     Ok(0)
 }
 
-/// The permission mode of the Claude session this runs inside, as the plugin's
-/// hook recorded it — what a subagent would inherit. Never over an explicit
-/// one.
+/// The calling session's mode as the plugin's `prompt` hook recorded it: what a
+/// subagent would inherit.
 fn inherited_mode(claude_args: &[String]) -> Option<String> {
     let explicit = claude_args
         .iter()
@@ -108,8 +105,6 @@ fn inherited_mode(claude_args: &[String]) -> Option<String> {
         .filter(|m| m != "default")
 }
 
-/// The session `--fork` starts from: the one given, or the Claude session
-/// this command runs inside.
 fn fork_source(id: String) -> Result<String, String> {
     let id = if id.is_empty() {
         std::env::var("CLAUDE_CODE_SESSION_ID")
@@ -216,8 +211,7 @@ pub fn runs(as_json: bool, everything: bool) -> Result<i32, String> {
     Ok(0)
 }
 
-/// The repository the current directory belongs to (its main checkout, for a
-/// worktree), or the directory itself outside git.
+/// For a worktree, its main checkout; outside git, the directory itself.
 fn project_root() -> Option<PathBuf> {
     let cwd = std::env::current_dir().ok()?.canonicalize().ok()?;
     let common = std::process::Command::new("git")
@@ -523,9 +517,8 @@ pub fn attach(id: &str) -> Result<i32, String> {
     runs::attach(id)
 }
 
-/// One line per change in a run's state, until interrupted — made for a
-/// Monitor tool or `tail`-style watching. `mine` follows the runs the calling
-/// Claude session started (and what they started).
+/// One line per state change, for a Monitor tool. `mine`: the runs the calling
+/// Claude session started, and what they started.
 pub fn events(ids: &[String], mine: bool) -> Result<i32, String> {
     let session = if mine {
         Some(

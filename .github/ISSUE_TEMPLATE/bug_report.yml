@@ -1,0 +1,72 @@
+name: Bug report
+description: Something in claude-proxy, the quota-router plugin or the proxy-runs mod does not work as documented.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Security problems go to [SECURITY.md](https://github.com/ohmaseclaro/claude-proxy/blob/main/SECURITY.md), not here.
+        Remove emails, tokens and account labels from anything you paste. Never paste a credential file or the contents of `~/.config/claude-proxy`.
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - the claude-proxy binary
+        - the quota-router plugin
+        - the proxy-runs mod
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: claude-proxy version
+      placeholder: claude-proxy --version
+    validations:
+      required: true
+  - type: input
+    id: claude-version
+    attributes:
+      label: Claude Code version
+      placeholder: claude --version
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: OS
+      description: Windows is not supported.
+      options:
+        - macOS
+        - Linux
+        - WSL
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: The `claude-proxy status <id>` output for a run, or the command's output.
+      render: shell
+    validations:
+      required: false

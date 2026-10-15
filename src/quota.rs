@@ -1,8 +1,5 @@
-//! Each account's remaining quota, ported from ai-usagebar: read the profile's
-//! own Claude credentials, refresh the access token when it is about to expire
-//! (writing it back to Claude's store), and ask the OAuth usage endpoint.
-//! Results are cached per account for 15 minutes so `auto` and `list` stay fast
-//! and never hammer the endpoint.
+//! Each account's remaining quota from the OAuth usage endpoint, refreshing the token into
+//! Claude's own store. Ported from ai-usagebar.
 
 use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
@@ -25,20 +22,16 @@ const USAGE_USER_AGENT: &str = "claude-cli/2.1.281 (external, cli)";
 const REFRESH_USER_AGENT: &str = "claude-cli/1.0";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
 pub const CACHE_TTL_SECS: i64 = 15 * 60;
-/// Refresh when the access token expires within this many seconds.
 const REFRESH_BUFFER_SECS: i64 = 300;
 
-/// The primary (default `~/.claude`) profile's name in `list`/`auto`. Reserved,
-/// so no proxy can take it.
 pub const PRIMARY_LABEL: &str = "claude";
 
-/// One account `list`/`auto` consider. `config_dir: None` is the primary.
+/// `config_dir: None` is the primary.
 pub struct Account {
     pub label: String,
     pub config_dir: Option<PathBuf>,
 }
 
-/// The primary profile plus every proxy in the registry.
 pub fn accounts() -> Vec<Account> {
     let mut all = vec![Account {
         label: PRIMARY_LABEL.into(),
@@ -51,7 +44,7 @@ pub fn accounts() -> Vec<Account> {
     all
 }
 
-/// One usage window: `used` is 0–100 percent.
+/// `used` is a percentage, 0–100.
 pub struct Window {
     pub name: String,
     pub used: f64,
@@ -59,8 +52,7 @@ pub struct Window {
 }
 
 impl Window {
-    /// Usage now: a window whose reset time has passed since it was measured
-    /// counts as empty.
+    /// A window whose reset time has passed since it was measured counts as empty.
     pub fn used_at(&self, now: i64) -> f64 {
         if self.resets_at.is_some_and(|r| r <= now) {
             0.0
@@ -86,9 +78,6 @@ impl Report {
     }
 }
 
-/// The binding constraint: the fullest window that has not reset since it was
-/// measured (a window whose reset time has passed counts as empty). `None` when
-/// nothing is known.
 pub fn pressure(windows: &[Window], now: i64) -> Option<f64> {
     windows
         .iter()
@@ -96,9 +85,6 @@ pub fn pressure(windows: &[Window], now: i64) -> Option<f64> {
         .fold(None, |acc, u| Some(acc.map_or(u, |a: f64| a.max(u))))
 }
 
-/// Index of the account `auto` should use: logged in, with the least pressure;
-/// ties go to the emptier weekly window, and accounts whose quota is unknown
-/// come after every known one.
 pub fn choose(reports: &[Report], now: i64) -> Option<usize> {
     let rank = |r: &Report| match r.pressure(now) {
         Some(p) => (0u8, p, weekly_used(r, now)),
@@ -119,22 +105,35 @@ fn weekly_used(r: &Report, now: i64) -> f64 {
         .map_or(0.0, |w| w.used_at(now))
 }
 
-/// Reports for every account, fetched in parallel.
 pub fn reports(accounts: &[Account], force: bool) -> Vec<Report> {
+    reports_with(accounts, |a| report(a, force))
+}
+
+fn reports_with(accounts: &[Account], lookup: impl Fn(&Account) -> Report + Sync) -> Vec<Report> {
+    let lookup = &lookup;
     std::thread::scope(|s| {
         let handles: Vec<_> = accounts
             .iter()
-            .map(|a| s.spawn(move || report(a, force)))
+            .map(|a| s.spawn(move || lookup(a)))
             .collect();
         handles
             .into_iter()
-            .map(|h| h.join().expect("quota lookup thread panicked"))
+            .zip(accounts)
+            .map(|(h, a)| {
+                h.join().unwrap_or_else(|_| Report {
+                    label: a.label.clone(),
+                    primary: a.config_dir.is_none(),
+                    email: None,
+                    logged_in: true,
+                    windows: Vec::new(),
+                    fetched_at: None,
+                    error: Some("quota lookup failed".into()),
+                })
+            })
             .collect()
     })
 }
 
-/// One account's quota: cached when fresh (unless `force`), otherwise fetched.
-/// A failed fetch keeps the last cached figures and records the error.
 pub fn report(account: &Account, force: bool) -> Report {
     let now = now_secs();
     let cache = cache_path(&account.label);
@@ -225,8 +224,8 @@ fn oauth_str(doc: &Value, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Stale and refreshable. A credential with no refresh token (Claude's
-/// trusted-device flow) is used as-is: posting an empty grant only fails.
+/// A credential with no refresh token (Claude's trusted-device flow) is used as-is:
+/// posting an empty grant only fails.
 fn needs_refresh(doc: &Value, now: i64) -> bool {
     let expires = doc
         .get("claudeAiOauth")
@@ -237,16 +236,14 @@ fn needs_refresh(doc: &Value, now: i64) -> bool {
         && expires.is_some_and(|e| e < now + REFRESH_BUFFER_SECS)
 }
 
-/// Refresh under a per-account lock, re-reading first in case Claude (or
-/// another claude-proxy) already did, then write the result back to Claude's
-/// own store. If the server rotated the refresh token and the write fails, the
-/// old one is already spent and the account is logged out — a hard error.
+/// Re-reads under the lock in case Claude or another claude-proxy already refreshed. A rotated
+/// refresh token that fails to save leaves the account logged out, so that is a hard error.
 fn refresh_locked(account: &Account, source: &creds::Source, now: i64) -> Result<Value, String> {
     let lock_path = cache_path(&account.label).with_extension("lock");
     if let Some(parent) = lock_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        let _ = crate::paths::private_dir(parent);
     }
-    let lock = std::fs::File::create(&lock_path)
+    let lock = crate::paths::append(&lock_path)
         .map_err(|e| format!("could not create the refresh lock: {e}"))?;
     lock.lock()
         .map_err(|e| format!("could not take the refresh lock: {e}"))?;
@@ -343,8 +340,7 @@ fn get_usage(token: &str, label: &str) -> Result<Value, String> {
     }
 }
 
-/// The windows in a usage response. Lossy by design — the endpoint is
-/// undocumented and its shape varies by plan.
+/// Lossy by design: the endpoint is undocumented and its shape varies by plan.
 pub fn parse_usage(v: &Value) -> Vec<Window> {
     let mut out: Vec<Window> = Vec::new();
     for (key, name) in [
@@ -424,14 +420,10 @@ fn email(config_dir: Option<&Path>) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Drop an account's cached quota, so the next lookup fetches real figures —
-/// used when a run finds the account at its limit.
 pub fn invalidate(label: &str) {
     let _ = std::fs::remove_file(cache_path(label));
 }
 
-/// Fold the live usage a running Claude reports in its `rate_limit_event` into
-/// the account's cache, so `auto` sees it without another lookup.
 pub fn record_rate_limit(label: &str, info: &Value) {
     record_rate_limit_at(&cache_path(label), info, now_secs());
 }
@@ -477,12 +469,9 @@ fn write_cache(path: &Path, fetched_at: i64, usage: &Value) {
     let Some(parent) = path.parent() else {
         return;
     };
-    let _ = std::fs::create_dir_all(parent);
-    let tmp = path.with_extension("json.tmp");
+    let _ = crate::paths::private_dir(parent);
     let body = json!({ "fetched_at": fetched_at, "usage": usage }).to_string();
-    if std::fs::write(&tmp, body).is_ok() {
-        let _ = std::fs::rename(&tmp, path);
-    }
+    let _ = crate::paths::write_atomic(path, body.as_bytes(), 0o600);
 }
 
 pub fn now_secs() -> i64 {
@@ -491,7 +480,6 @@ pub fn now_secs() -> i64 {
         .map_or(0, |d| d.as_secs() as i64)
 }
 
-/// `YYYY-MM-DDTHH:MM:SS[.frac](Z|±HH:MM)` to Unix seconds.
 pub fn parse_rfc3339(s: &str) -> Option<i64> {
     let b = s.as_bytes();
     let num = |from: usize, to: usize| -> Option<i64> { s.get(from..to)?.parse().ok() };
@@ -528,7 +516,7 @@ pub fn parse_rfc3339(s: &str) -> Option<i64> {
     Some(days_from_civil(y, mo, d) * 86_400 + h * 3600 + mi * 60 + sec - offset)
 }
 
-/// Days since 1970-01-01 for a proleptic Gregorian date (Howard Hinnant).
+/// Howard Hinnant's algorithm.
 fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     let y = if m <= 2 { y - 1 } else { y };
     let era = y.div_euclid(400);
@@ -539,7 +527,6 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     era * 146_097 + doe - 719_468
 }
 
-/// A short human duration: `40m`, `2h10m`, `3d4h`.
 pub fn short_duration(secs: i64) -> String {
     let secs = secs.max(0);
     let (d, h, m) = (secs / 86_400, secs % 86_400 / 3600, secs % 3600 / 60);
@@ -576,6 +563,25 @@ mod tests {
             fetched_at: None,
             error: None,
         }
+    }
+
+    #[test]
+    fn one_failed_lookup_does_not_sink_the_others() {
+        let accounts: Vec<Account> = ["a", "boom", "c"]
+            .into_iter()
+            .map(|label| Account {
+                label: label.into(),
+                config_dir: Some(PathBuf::from(label)),
+            })
+            .collect();
+        let got = reports_with(&accounts, |a| {
+            assert!(a.label != "boom", "lookup blew up");
+            report(&a.label, true, vec![])
+        });
+        let labels: Vec<&str> = got.iter().map(|r| r.label.as_str()).collect();
+        assert_eq!(labels, ["a", "boom", "c"]);
+        assert!(got[1].error.is_some() && got[1].logged_in);
+        assert!(got[0].error.is_none() && got[2].error.is_none());
     }
 
     #[test]
@@ -619,7 +625,7 @@ mod tests {
     fn pressure_is_the_fullest_window_not_yet_reset() {
         let now = 1_000;
         let ws = vec![
-            window("5h", 90.0, Some(500)), // already reset → 0
+            window("5h", 90.0, Some(500)),
             window("7d", 40.0, Some(5_000)),
         ];
         assert_eq!(pressure(&ws, now), Some(40.0));
@@ -636,9 +642,7 @@ mod tests {
             report("idle", true, vec![window("5h", 10.0, None)]),
         ];
         assert_eq!(choose(&reports, now), Some(3));
-        // With only an unknown and a busy account, the known one still wins.
         assert_eq!(choose(&reports[..3], now), Some(0));
-        // Nothing logged in: nothing to choose.
         assert_eq!(choose(&reports[1..2], now), None);
     }
 

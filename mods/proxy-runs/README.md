@@ -19,9 +19,10 @@ A Claude Code mod (function-hooks plugin, Claude Code 2.1.287+) that makes
   blocks; `Show N earlier` opens the rest (last 400 events).
 - **Any run, on request.** `mcp__proxy-runs__watch` takes a run id and draws
   that run's row in the conversation, another session's included; with no id
-  it draws every run going in the repository. The policy section (and
-  quota-router's) tells the model to call it whenever you ask to see, show,
-  watch or follow runs. `/runs <id>` opens the pane on that run.
+  it draws every run going in the repository. A run id is six lowercase hex
+  characters, as `claude-proxy run` prints it; a malformed id is refused. The
+  policy section (and quota-router's) tells the model to call it whenever you
+  ask to see, show, watch or follow runs. `/runs <id>` opens the pane on that run.
 - **Runs started through Bash.** A `claude-proxy run` Bash row gets the run's
   row under the command's own, from the id the command printed.
 - **The notice reads as one line.** The prompt the mod submits when a run
@@ -57,6 +58,10 @@ policy section, no marker.
 
 ## Enable
 
+The folder comes from a clone of this repository
+(`git clone https://github.com/ohmaseclaro/claude-proxy`); `/path/to/claude-proxy`
+below stands for that clone.
+
 Terminal, one session:
 
 ```console
@@ -84,8 +89,9 @@ resume) to load the mod or start watching it.
 Runs inherit that setting (every profile shares `settings.json`), which is why
 the mod checks `CLAUDE_PROXY_RUN` and stays inert inside them.
 
-Needs `claude-proxy` 0.7.0+ on `PATH`; the quieter quota-router hooks below
-need a build from this branch.
+Needs `claude-proxy` 0.8.0 or later on `PATH`, because the mod lists runs with
+`claude-proxy runs --json --all`. Install it as in the main README
+(`cargo install --git https://github.com/ohmaseclaro/claude-proxy`).
 
 ## With the quota-router plugin
 
@@ -139,6 +145,10 @@ The two can be enabled together:
 ## Develop
 
 ```console
-$ claude plugin validate mods/proxy-runs
+$ claude plugin validate mods/proxy-runs --strict
 $ claude plugin test mods/proxy-runs
+$ npx -y -p typescript@5 tsc -p mods/proxy-runs --noEmit
 ```
+
+tsc needs the git-ignored types a session writes when it loads the mod; see
+[CONTRIBUTING.md](../../CONTRIBUTING.md) for how to regenerate them.

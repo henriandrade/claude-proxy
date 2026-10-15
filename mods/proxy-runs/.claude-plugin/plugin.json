@@ -3,7 +3,11 @@
   "version": "0.1.0",
   "description": "claude-proxy managed runs as live rows, a Runs pane and notifications, in place of local subagents",
   "author": {
-    "name": "Augusto Claro"
+    "name": "ohmaseclaro",
+    "url": "https://github.com/ohmaseclaro"
   },
+  "homepage": "https://github.com/ohmaseclaro/claude-proxy",
+  "repository": "https://github.com/ohmaseclaro/claude-proxy",
+  "license": "MIT",
   "types": "./types/index.d.ts"
 }

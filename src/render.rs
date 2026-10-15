@@ -1,20 +1,16 @@
-//! Turning a run's `events.jsonl` — Claude's stream-json plus claude-proxy's own
-//! message/turn markers — into a readable transcript, one event line at a time
-//! so `--follow` can render incrementally.
+//! Renders a run's `events.jsonl` one line at a time, so `--follow` can render incrementally.
 
 use serde_json::Value;
 
 const ONE_LINE_MAX: usize = 140;
 
-/// Display lines for one event line. `full` keeps tool inputs, tool output, and
-/// messages whole; the default keeps one line per tool call and result.
+/// `full` keeps tool inputs, output and messages whole; otherwise one line each.
 pub fn render_line(line: &str, full: bool) -> Vec<String> {
     let line = line.trim();
     if line.is_empty() {
         return Vec::new();
     }
     let Ok(v) = serde_json::from_str::<Value>(line) else {
-        // Claude printed something that is not an event (e.g. a login error).
         return vec![format!("  ! {}", one_line(line))];
     };
     let str_of = |key: &str| v.get(key).and_then(Value::as_str).unwrap_or("");
@@ -107,7 +103,6 @@ fn marker(v: &Value, full: bool) -> Vec<String> {
     }
 }
 
-/// What an `allow` granted for good, as a suffix.
 fn granted(updates: &Value) -> String {
     let parts: Vec<String> = updates
         .as_array()
@@ -135,7 +130,6 @@ fn granted(updates: &Value) -> String {
     }
 }
 
-/// A pending question or permission prompt, with the commands that answer it.
 pub fn ask_lines(id: &str, tool: &str, input: &Value, full: bool) -> Vec<String> {
     if tool == "AskUserQuestion" {
         let mut out: Vec<String> = input["questions"]
@@ -222,7 +216,6 @@ fn assistant_block(b: &Value, full: bool) -> Vec<String> {
     }
 }
 
-/// The one argument that says what a tool call does.
 pub fn tool_summary(name: &str, input: &Value) -> String {
     let pick = |key: &str| input.get(key).and_then(Value::as_str).map(str::to_string);
     let picked = match name {
@@ -271,8 +264,8 @@ fn tool_result(b: &Value, full: bool) -> Vec<String> {
 fn result_line(v: &Value) -> String {
     let ok = v.get("subtype").and_then(Value::as_str) == Some("success")
         && !v.get("is_error").and_then(Value::as_bool).unwrap_or(false);
-    // An API error (usage limit, not logged in) arrives as subtype `success`
-    // with `is_error`; its text was already shown as the assistant's message.
+    // An API error arrives as subtype `success` with `is_error`; its text was
+    // already shown as the assistant's message.
     let subtype = v.get("subtype").and_then(Value::as_str).unwrap_or("error");
     let mut parts = vec![if ok {
         "✓ done".to_string()
@@ -299,7 +292,6 @@ fn result_line(v: &Value) -> String {
     line
 }
 
-/// Only worth a line when Claude is warning or refusing.
 fn rate_limit(v: &Value) -> Option<String> {
     let info = v.get("rate_limit_info")?;
     let status = info.get("status").and_then(Value::as_str).unwrap_or("");
@@ -353,8 +345,10 @@ mod tests {
             ["▶ you", "  fix the tests"]
         );
         assert_eq!(
-            r(r#"{"type":"claude_proxy","event":"turn_start","turn":2,"account":"claude-gmail"}"#),
-            ["● claude-gmail · turn 2"]
+            r(
+                r#"{"type":"claude_proxy","event":"turn_start","turn":2,"account":"claude-personal"}"#
+            ),
+            ["● claude-personal · turn 2"]
         );
         assert_eq!(
             r(r#"{"type":"assistant","message":{"content":[

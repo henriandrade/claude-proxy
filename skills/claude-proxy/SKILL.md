@@ -46,7 +46,7 @@ Whenever claude-proxy is in use, tell the user in plain words — they should
 never have to guess. Say what you started, on which account, the run id, and
 give a ready-to-run watch command, e.g.:
 
-> Delegated the parser fix to claude-proxy run `a1b2c3` on `claude-gmail`.
+> Delegated the parser fix to claude-proxy run `a1b2c3` on `claude-personal`.
 > Watch it: `claude-proxy watch a1b2c3` · take over: `claude-proxy attach a1b2c3`
 
 Mention it again when a run moves to another account, asks something, or
@@ -69,7 +69,7 @@ claude-proxy wait a1b2c3       # as a background command
 `claude-proxy` command on its own with the id written out — not inside `$(…)`,
 a shell variable, or a chain with other commands — so it matches the user's
 permission rule for `claude-proxy` instead of prompting or being refused. Pass a
-long task on stdin: `claude-proxy run - <<'EOF' … EOF`. Flags:
+long task on stdin: `claude-proxy run - <<'CLAUDE_PROXY_TASK' … CLAUDE_PROXY_TASK`. Flags:
 
 | Flag | Use |
 |---|---|
@@ -233,7 +233,7 @@ only after a usage-limit error or when the user asks.
   account is left or it was pinned — `claude-proxy send <id> --account auto
   "continue"` moves it by hand.
 - **`not logged in` / `sign-in expired`:** tell the user to run that account's
-  command (e.g. `claude-gmail`) and log in. Never log in for them.
+  command (e.g. `claude-personal`) and log in. Never log in for them.
 - **`no logged-in account`:** ask the user to add one with
   `claude-proxy add <name>`.
 

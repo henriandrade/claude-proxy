@@ -3,12 +3,14 @@ name = "claude-proxy"
 version = "0.8.0"
 edition = "2021"
 rust-version = "1.89"
-description = "Run Claude Code under multiple accounts at once — each as its own command, with its own credential, never conflicting."
+description = "Run Claude Code under several accounts: a command per account, quota-aware auto, failover runs"
 license = "MIT"
+homepage = "https://github.com/ohmaseclaro/claude-proxy"
 repository = "https://github.com/ohmaseclaro/claude-proxy"
 readme = "README.md"
-keywords = ["claude", "claude-code", "cli", "oauth", "accounts"]
-categories = ["command-line-utilities"]
+keywords = ["claude", "claude-code", "anthropic", "multi-account", "quota"]
+categories = ["command-line-utilities", "development-tools"]
+include = ["/src/**/*.rs", "/README.md", "/LICENSE", "/THIRD_PARTY_NOTICES.md"]
 
 [[bin]]
 name = "claude-proxy"

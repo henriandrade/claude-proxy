@@ -1,19 +1,8 @@
-//! Reading and writing an account's Claude Code credentials, in the same store
-//! Claude itself uses, so a token we refresh is the one the next `claude` run
-//! sees. Ported from ai-usagebar's `anthropic::keychain` / `creds`.
-//!
-//! macOS: a login-Keychain generic password. The primary profile uses service
-//! `Claude Code-credentials`; a `CLAUDE_CONFIG_DIR` profile uses
-//! `Claude Code-credentials-<first 8 hex of sha256(dir)>`. Elsewhere:
-//! `<config dir>/.credentials.json`.
-//!
-//! All Keychain access goes through `/usr/bin/security`. A native write would
-//! stamp this binary's code identity onto the item's partition list, and every
-//! later read — Claude Code's included — would raise a Keychain dialog.
+//! An account's credentials, in the store Claude Code itself uses so a refreshed token is
+//! the one the next `claude` run sees. Ported from ai-usagebar's `anthropic::keychain` / `creds`.
 
 use std::path::Path;
 
-/// Where one account's credential blob lives.
 pub enum Source {
     #[cfg(target_os = "macos")]
     Keychain { service: String },
@@ -21,7 +10,7 @@ pub enum Source {
     File(std::path::PathBuf),
 }
 
-/// The store for a profile; `None` is the primary (default) profile.
+/// Claude Code's own naming; `None` is the primary profile.
 pub fn source_for(config_dir: Option<&Path>) -> Result<Source, String> {
     #[cfg(target_os = "macos")]
     {
@@ -43,7 +32,7 @@ pub fn source_for(config_dir: Option<&Path>) -> Result<Source, String> {
     }
 }
 
-/// The raw credential JSON, or `None` when the account is not logged in.
+/// `None` when the account is not logged in.
 pub fn read(source: &Source) -> Result<Option<String>, String> {
     match source {
         #[cfg(target_os = "macos")]
@@ -58,7 +47,6 @@ pub fn read(source: &Source) -> Result<Option<String>, String> {
     }
 }
 
-/// Replace the credential JSON in place.
 pub fn write(source: &Source, blob: &str) -> Result<(), String> {
     match source {
         #[cfg(target_os = "macos")]
@@ -70,20 +58,8 @@ pub fn write(source: &Source, blob: &str) -> Result<(), String> {
 
 #[cfg(not(target_os = "macos"))]
 fn write_file_private(path: &Path, blob: &str) -> Result<(), String> {
-    use std::io::Write;
-    let tmp = path.with_extension("json.claude-proxy-tmp");
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    let result = opts
-        .open(&tmp)
-        .and_then(|mut f| f.write_all(blob.as_bytes()))
-        .and_then(|()| std::fs::rename(&tmp, path));
-    result.map_err(|e| format!("could not write {}: {e}", path.display()))
+    crate::paths::write_atomic(path, blob.as_bytes(), 0o600)
+        .map_err(|e| format!("could not write {}: {e}", path.display()))
 }
 
 #[cfg(target_os = "macos")]
@@ -113,6 +89,8 @@ fn sha256_prefix(text: &str) -> Result<String, String> {
         .ok_or_else(|| "shasum produced unexpected output".to_string())
 }
 
+/// Only through `/usr/bin/security`: a native write stamps this binary onto the item's
+/// partition list, and every later read, Claude Code's too, raises a Keychain dialog.
 #[cfg(target_os = "macos")]
 mod keychain {
     use std::io::Write;
@@ -174,8 +152,7 @@ mod keychain {
                     .map_err(|e| format!("could not run security: {e}"))?;
                 child.wait_with_output()
             }
-            // Too long for `security -i`: argv, the same fallback Claude Code
-            // itself uses for a large blob.
+            // Too long for `security -i`: argv, as Claude Code does.
             None => Command::new("/usr/bin/security")
                 .args([
                     "add-generic-password",
@@ -202,8 +179,7 @@ mod keychain {
         }
     }
 
-    /// Quote one value for `security -i`'s tokenizer; `None` on a newline,
-    /// which would end the command early.
+    /// `None` on a newline, which would end the `security -i` command early.
     fn quote(value: &str) -> Option<String> {
         if value.contains(['\n', '\r']) {
             return None;

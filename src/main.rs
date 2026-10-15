@@ -1,12 +1,5 @@
-//! claude-proxy — run Claude Code under multiple accounts at once.
-//!
-//! One binary, two roles, chosen by the name it is invoked under (`argv[0]`),
-//! the busybox pattern:
-//!
-//! - invoked as **`claude-proxy`**: the manager (`add`, `list`, `auto`, `run`,
-//!   …);
-//! - invoked as **any other name** (e.g. `claude-gmail`, installed by `add`):
-//!   the proxy — become `claude` on that account's own profile.
+//! One binary, two roles by `argv[0]` (busybox-style): `claude-proxy` is the manager;
+//! any other name (an installed proxy like `claude-personal`) runs `claude` on that account.
 
 mod add;
 mod agents;
@@ -28,8 +21,6 @@ mod shared;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-/// The name the manager answers to. Installed proxy commands have any other
-/// basename and are routed to the proxy role.
 const MANAGER_NAME: &str = "claude-proxy";
 
 fn main() {
@@ -48,8 +39,6 @@ fn main() {
     let argv0 = raw.first().cloned().unwrap_or_default();
     let invoked = basename(&argv0);
 
-    // Proxy role: invoked under an installed account name. Everything after the
-    // program name is forwarded to `claude` verbatim.
     if invoked != MANAGER_NAME {
         let args: Vec<OsString> = raw.split_off(1);
         match proxy::run(&invoked, &args) {
@@ -61,12 +50,9 @@ fn main() {
         }
     }
 
-    // Manager role.
     std::process::exit(cli::main());
 }
 
-/// The file name a path was invoked under, lossily, without extension noise
-/// (`claude-gmail.exe` → `claude-gmail`).
 fn basename(arg: &OsString) -> String {
     let path = PathBuf::from(arg);
     path.file_stem()
@@ -88,9 +74,10 @@ mod tests {
         assert_eq!(name_of("/usr/local/bin/claude-proxy"), MANAGER_NAME);
         assert_eq!(name_of("claude-proxy"), MANAGER_NAME);
         assert_eq!(name_of("./target/release/claude-proxy"), MANAGER_NAME);
-        // An installed proxy routes to the proxy role.
-        assert_eq!(name_of("/home/me/.local/bin/claude-gmail"), "claude-gmail");
-        // The `.exe` suffix is dropped so a Windows label still matches.
-        assert_eq!(name_of("claude-gmail.exe"), "claude-gmail");
+        assert_eq!(
+            name_of("/home/me/.local/bin/claude-personal"),
+            "claude-personal"
+        );
+        assert_eq!(name_of("claude-personal.exe"), "claude-personal");
     }
 }

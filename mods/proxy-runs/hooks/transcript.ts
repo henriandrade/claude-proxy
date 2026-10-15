@@ -1,5 +1,4 @@
-// A run's events.jsonl (Claude's stream-json plus claude-proxy's markers) as
-// the items and blocks the transcript draws.
+// A run's events.jsonl: Claude's stream-json plus claude-proxy's markers.
 import type { JsonValue } from 'claude-code'
 
 import type { RunItem, RunTool } from '../types'
@@ -87,7 +86,6 @@ function duration(secs: number): string {
   return m < 60 ? `${m}m ${Math.round(secs % 60)}s` : `${Math.floor(m / 60)}h ${m % 60}m`
 }
 
-/** The transcript, oldest first, from the run's raw event lines. */
 export function parse(lines: readonly string[]): RunItem[] {
   const items: RunItem[] = []
   const toolAt = new Map<string, number>()
@@ -183,7 +181,6 @@ export function parse(lines: readonly string[]): RunItem[] {
 
 export type Block = { kind: 'group'; id: string; tools: RunTool[] } | Exclude<RunItem, RunTool>
 
-/** Consecutive tool calls fold into one group, as Claude folds them. */
 export function blocks(items: readonly RunItem[]): Block[] {
   const out: Block[] = []
   for (const item of items) {
@@ -206,7 +203,6 @@ const KINDS: [RegExp, string, string][] = [
   [/^(Agent|Task)$/, 'ran', 'agent'],
 ]
 
-/** "Ran 14 commands, read 3 files", the way Claude names a group. */
 export function groupLabel(tools: readonly RunTool[]): string {
   const counts = new Map<string, { verb: string; noun: string; n: number }>()
   for (const t of tools) {
@@ -222,7 +218,6 @@ export function groupLabel(tools: readonly RunTool[]): string {
   return `${text.charAt(0).toUpperCase()}${text.slice(1)}${failed ? ` · ${failed} failed` : ''}`
 }
 
-/** A unified diff of one Edit's input, for drawing where no native row is. */
 export function editDiff(input: unknown): string | undefined {
   const i = (input ?? {}) as Record<string, unknown>
   const edits =
@@ -242,7 +237,6 @@ export function editDiff(input: unknown): string | undefined {
   return diff && diff.length <= 9000 ? diff : undefined
 }
 
-/** The first `n` lines, and whether there were more. */
 export function head(text: string, n: number): [string, number] {
   const lines = text.split('\n')
   return [lines.slice(0, n).join('\n'), Math.max(0, lines.length - n)]

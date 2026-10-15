@@ -1,16 +1,10 @@
-//! Decisions a run cannot make alone — permission prompts and Claude's
-//! `AskUserQuestion` — handed to whoever manages the run.
-//!
-//! Every turn starts Claude with `--permission-prompt-tool` pointing at
-//! `claude-proxy __permit <id>`, a one-tool MCP server. When Claude needs a
-//! decision, the server records it as `asks/<key>.json` and blocks until
-//! `allow`, `deny`, or `answer` writes `asks/<key>.answer`. What `allow` grants
-//! for good (`--always`, `--accept-edits`) is also kept in the run's `allowed`
-//! and `mode` files, so a fresh Claude process starts with it.
+//! Decisions a run cannot make alone go through the `__permit` MCP server, which
+//! records `asks/<key>.json` and waits for `allow`, `deny` or `answer`.
 
 use std::fs;
 use std::io::{BufRead, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Map, Value};
@@ -44,8 +38,8 @@ impl Ask {
     }
 }
 
-/// Unanswered asks, oldest first. Only meaningful while the run is alive: the
-/// drainer clears them when a turn ends.
+/// Only meaningful while the run is alive: the drainer clears asks when Claude
+/// exits.
 pub fn pending(dir: &Path) -> Vec<Ask> {
     let asks = dir.join("asks");
     let mut keys: Vec<String> = fs::read_dir(&asks)
@@ -79,21 +73,17 @@ pub enum Reply {
     Answer(Vec<String>),
 }
 
-/// What an `allow` grants beyond this one request.
 #[derive(Default)]
 pub struct Grant {
     /// Stop asking for requests like this one.
     pub always: bool,
-    /// Stop asking for requests matching this permission rule.
     pub rule: Option<String>,
-    /// Accept file edits without asking from now on.
     pub accept_edits: bool,
 }
 
 const EDIT_TOOLS: &[&str] = &["Edit", "Write", "MultiEdit", "NotebookEdit"];
 
-/// Answer the oldest pending ask of run `id`. Returns it and what was granted
-/// for good, in words.
+/// Answers the oldest pending ask. Returns it and what was granted for good, in words.
 pub fn reply(id: &str, reply: Reply) -> Result<(Ask, Vec<String>), String> {
     let meta = runs::load(id)?;
     let dir = run_dir(id);
@@ -142,7 +132,7 @@ pub fn reply(id: &str, reply: Reply) -> Result<(Ask, Vec<String>), String> {
             json!({"behavior": "allow", "answers": answers})
         }
     };
-    write_atomic(
+    write_json(
         &dir.join("asks").join(format!("{}.answer", ask.key)),
         &answer,
     )
@@ -150,8 +140,7 @@ pub fn reply(id: &str, reply: Reply) -> Result<(Ask, Vec<String>), String> {
     Ok((ask, granted))
 }
 
-/// The permission updates an `allow` sends Claude for the live process, after
-/// recording them for the processes that come later.
+/// Updates for the live Claude process, after recording them for later processes.
 fn grant_updates(
     dir: &Path,
     meta: &runs::Meta,
@@ -160,32 +149,41 @@ fn grant_updates(
     granted: &mut Vec<String>,
 ) -> Result<Vec<Value>, String> {
     let edit = EDIT_TOOLS.contains(&ask.tool.as_str());
+    let rule = match grant.rule {
+        Some(rule) => Some(rule),
+        None if grant.always && !edit => Some(rule_for(&ask.tool, &ask.input).map_err(|why| {
+            format!(
+                "run {}: {why}. Allow it once:  claude-proxy allow {0}\n\
+                 or choose the rule yourself:  claude-proxy allow {0} --rule \"Bash(…)\"",
+                meta.id
+            )
+        })?),
+        None => None,
+    };
     let mut updates = Vec::new();
     // Native Claude's "don't ask again" for an edit is accepting edits.
-    let mode = if grant.accept_edits || (grant.always && grant.rule.is_none() && edit) {
+    let mode = if grant.accept_edits || (grant.always && rule.is_none() && edit) {
         Some("acceptEdits")
     } else if ask.tool == "ExitPlanMode" && started_in_plan_mode(meta) {
-        // Approved: later processes must not start back in plan mode.
+        // Approved: later processes must not restart in plan mode.
         Some("default")
     } else {
         None
     };
     if let Some(mode) = mode {
-        fs::write(dir.join("mode"), mode).map_err(|e| format!("could not save the mode: {e}"))?;
+        crate::paths::write_atomic(&dir.join("mode"), mode.as_bytes(), 0o600)
+            .map_err(|e| format!("could not save the mode: {e}"))?;
         updates.push(json!({"type": "setMode", "mode": mode, "destination": "session"}));
         if mode == "acceptEdits" {
             granted.push("accepting edits".into());
         }
     }
-    let rule = grant
-        .rule
-        .or_else(|| (grant.always && !edit).then(|| rule_for(&ask.tool, &ask.input)));
     if let Some(rule) = rule {
         let mut rules = allowed_rules(dir);
         if !rules.contains(&rule) {
             rules.push(rule.clone());
         }
-        write_atomic(&dir.join("allowed"), &json!(rules))
+        write_json(&dir.join("allowed"), &json!(rules))
             .map_err(|e| format!("could not save the rule: {e}"))?;
         let (tool, content) = match rule.split_once('(') {
             Some((tool, rest)) => (tool, rest.strip_suffix(')')),
@@ -212,26 +210,44 @@ fn started_in_plan_mode(meta: &runs::Meta) -> bool {
             .any(|a| a == "--permission-mode=plan")
 }
 
-/// The narrowest rule covering a request: the exact command, the domain, or
-/// the tool.
-fn rule_for(tool: &str, input: &Value) -> String {
+/// The narrowest rule covering the request.
+fn rule_for(tool: &str, input: &Value) -> Result<String, String> {
     match tool {
-        "Bash" => format!("Bash({})", input["command"].as_str().unwrap_or("")),
-        "WebFetch" => {
-            let url = input["url"].as_str().unwrap_or("");
-            let host = url
-                .split_once("://")
-                .map_or(url, |(_, rest)| rest)
-                .split(['/', '?', '#'])
-                .next()
-                .unwrap_or("");
-            format!("WebFetch(domain:{host})")
+        "Bash" => {
+            let command = input["command"].as_str().unwrap_or("");
+            if command.contains(['*', '(', ')']) {
+                return Err(
+                    "a permission rule reads `*`, `(` and `)` as rule syntax, so --always could \
+                     allow more than this command"
+                        .into(),
+                );
+            }
+            Ok(format!("Bash({command})"))
         }
-        _ => tool.to_string(),
+        "WebFetch" => Ok(format!(
+            "WebFetch(domain:{})",
+            url_host(input["url"].as_str().unwrap_or(""))
+        )),
+        _ => Ok(tool.to_string()),
     }
 }
 
-/// Rules granted with `allow --always` / `--rule`, for Claude's `--allowedTools`.
+fn url_host(url: &str) -> String {
+    let authority = url
+        .split_once("://")
+        .map_or(url, |(_, rest)| rest)
+        .split(['/', '?', '#', '\\'])
+        .next()
+        .unwrap_or("");
+    let host = authority.rsplit('@').next().unwrap_or("");
+    let host = match host.strip_prefix('[') {
+        Some(rest) => rest.find(']').map_or(host, |end| &host[..end + 2]),
+        None => host.split(':').next().unwrap_or(""),
+    };
+    host.to_ascii_lowercase()
+}
+
+/// For Claude's `--allowedTools`.
 pub fn allowed_rules(dir: &Path) -> Vec<String> {
     fs::read(dir.join("allowed"))
         .ok()
@@ -239,7 +255,6 @@ pub fn allowed_rules(dir: &Path) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// The permission mode granted through `allow`, if any.
 pub fn granted_mode(dir: &Path) -> Option<String> {
     fs::read_to_string(dir.join("mode"))
         .ok()
@@ -247,7 +262,7 @@ pub fn granted_mode(dir: &Path) -> Option<String> {
         .filter(|m| !m.is_empty())
 }
 
-/// The MCP server Claude talks to over stdio: newline-delimited JSON-RPC.
+/// Newline-delimited JSON-RPC over stdio.
 pub fn serve(id: &str) -> Result<(), String> {
     let dir = run_dir(id);
     let mut out = std::io::stdout();
@@ -298,8 +313,7 @@ pub fn serve(id: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Post one ask and block until it is answered, the run is killed, or Claude
-/// goes away. Returns the permission-prompt-tool decision.
+/// Blocks until answered, the run is stopped, or Claude (our parent) goes away.
 fn decide(dir: &Path, id: &str, args: &Value) -> Value {
     let tool = args["tool_name"].as_str().unwrap_or("tool").to_string();
     let input = args.get("input").cloned().unwrap_or_else(|| json!({}));
@@ -307,11 +321,11 @@ fn decide(dir: &Path, id: &str, args: &Value) -> Value {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos());
-    let key = format!("{nanos:024}");
+    let key = ask_key(nanos);
     let ask =
         json!({"tool": tool, "input": input, "tool_use_id": args["tool_use_id"], "at": now_secs()});
-    if fs::create_dir_all(&asks)
-        .and_then(|()| write_atomic(&asks.join(format!("{key}.json")), &ask))
+    if crate::paths::private_dir(&asks)
+        .and_then(|()| write_json(&asks.join(format!("{key}.json")), &ask))
         .is_err()
     {
         return json!({"behavior": "deny", "message": "claude-proxy could not record the request."});
@@ -373,11 +387,16 @@ fn parent_id() -> u32 {
     0
 }
 
-fn write_atomic(path: &Path, value: &Value) -> std::io::Result<()> {
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".tmp");
-    fs::write(&tmp, serde_json::to_vec(value)?)?;
-    fs::rename(tmp, path)
+/// Unique and ordered by posting time, so same-tick asks never overwrite each
+/// other and still list oldest first.
+fn ask_key(nanos: u128) -> String {
+    static ASKS: AtomicUsize = AtomicUsize::new(0);
+    let n = ASKS.fetch_add(1, Ordering::Relaxed);
+    format!("{nanos:024}-{n:06}-{}", std::process::id())
+}
+
+fn write_json(path: &Path, value: &Value) -> std::io::Result<()> {
+    crate::paths::write_atomic(path, &serde_json::to_vec(value)?, 0o600)
 }
 
 #[cfg(test)]
@@ -388,15 +407,36 @@ mod tests {
     fn always_allowing_picks_the_narrowest_rule() {
         assert_eq!(
             rule_for("Bash", &json!({"command": "cargo test -p x"})),
-            "Bash(cargo test -p x)"
+            Ok("Bash(cargo test -p x)".into())
         );
-        assert_eq!(
-            rule_for(
-                "WebFetch",
-                &json!({"url": "https://docs.rs/serde/latest?x=1"})
-            ),
-            "WebFetch(domain:docs.rs)"
-        );
-        assert_eq!(rule_for("mcp__x__y", &json!({})), "mcp__x__y");
+        for command in ["rm -rf build/*", "echo $(date)", "(cd x && make)"] {
+            assert!(
+                rule_for("Bash", &json!({ "command": command })).is_err(),
+                "{command}"
+            );
+        }
+        for (url, host) in [
+            ("https://docs.rs/serde/latest?x=1", "docs.rs"),
+            ("https://user:pw@Docs.rs:443/x", "docs.rs"),
+            ("https://good.com@evil.com/", "evil.com"),
+            ("http://evil.com\\@good.com/", "evil.com"),
+            ("http://[::1]:8080/", "[::1]"),
+        ] {
+            assert_eq!(
+                rule_for("WebFetch", &json!({ "url": url })),
+                Ok(format!("WebFetch(domain:{host})")),
+                "{url}"
+            );
+        }
+        assert_eq!(rule_for("mcp__x__y", &json!({})), Ok("mcp__x__y".into()));
+    }
+
+    #[test]
+    fn ask_keys_are_unique_and_keep_posting_order() {
+        let a = ask_key(5);
+        let b = ask_key(5);
+        assert_ne!(a, b);
+        assert!(a < b);
+        assert!(ask_key(4) < a);
     }
 }

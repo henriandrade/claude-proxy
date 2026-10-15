@@ -1,21 +1,11 @@
-//! Sharing your Claude setup with every profile while the login stays apart.
-//!
-//! A profile is its own `CLAUDE_CONFIG_DIR`, so on its own it would see none of
-//! the skills, plugins, hooks, settings, or `CLAUDE.md` in `~/.claude`. Each
-//! allowlisted entry is symlinked from `~/.claude` into the profile instead.
-//! Transcripts (`projects`) are shared too, so every account's sessions land in
-//! `~/.claude/projects` and `--resume` sees them all.
-//!
-//! An allowlist, not a denylist: anything account-specific (the login, the
-//! identity in `.claude.json`, org policy, MCP auth state, caches) stays in the
-//! profile by default, including entries a future Claude version adds.
+//! Entries symlinked from `~/.claude` into each profile. An allowlist, not a denylist, so
+//! account-specific state (login, identity, org policy, caches) stays in the profile.
 
 use std::path::Path;
 
 use crate::paths::home;
 
 const SHARED: &[&str] = &[
-    // configuration
     "settings.json",
     "CLAUDE.md",
     "keybindings.json",
@@ -26,13 +16,12 @@ const SHARED: &[&str] = &[
     "plugins",
     "hooks",
     "scripts",
-    // session data: transcripts + per-project memory, checkpoints, todos, plans
     "projects",
     "file-history",
     "todos",
     "plans",
     "history.jsonl",
-    // get-shit-done installs under the config dir
+    // GSD installs under the config dir.
     "get-shit-done",
     "gsd-core",
     "gsd-file-manifest.json",
@@ -41,9 +30,7 @@ const SHARED: &[&str] = &[
     ".gsd-source",
 ];
 
-/// Shared entries whose profile-local contents are worth keeping: they are
-/// merged into `~/.claude` before the link replaces them (a log file is
-/// appended).
+/// Merged into `~/.claude` before the link replaces them (a log file is appended).
 const MERGE: &[&str] = &[
     "projects",
     "file-history",
@@ -52,11 +39,8 @@ const MERGE: &[&str] = &[
     "history.jsonl",
 ];
 
-/// Link every shared entry into `profile`. Idempotent and best-effort: a link
-/// that cannot be made leaves the profile working, just without that entry.
-/// A profile's own copy of a shared entry (one Claude wrote before the entry
-/// was linked) gives way to the link: merged when it holds history, otherwise
-/// kept as `<name>.pre-shared`, never deleted.
+/// Best-effort. A profile's own copy of an entry is merged or kept as `<name>.pre-shared`,
+/// never deleted.
 pub fn link_shared(profile: &Path) {
     link_shared_from(&home().join(".claude"), profile);
 }
@@ -79,8 +63,6 @@ fn link_shared_from(global: &Path, profile: &Path) {
                 if MERGE.contains(name) {
                     merge_into(&dst, &src);
                 }
-                // Whatever is left (or a config dir Claude seeded on first run)
-                // is kept as a backup, never deleted.
                 let cleared = std::fs::remove_dir(&dst).is_ok()
                     || std::fs::rename(&dst, backup_path(&dst)).is_ok();
                 if cleared {
@@ -95,14 +77,11 @@ fn link_shared_from(global: &Path, profile: &Path) {
                     let _ = symlink(&src, &dst);
                 }
             }
-            // Already a link, or unreadable: leave it.
             _ => {}
         }
     }
 }
 
-/// Move everything in `from` into `to` that does not already exist there,
-/// recursing into directories present on both sides.
 fn merge_into(from: &Path, to: &Path) {
     let Ok(entries) = std::fs::read_dir(from) else {
         return;
@@ -178,7 +157,6 @@ mod tests {
             !profile.join("agents").exists(),
             "absent globally → not linked"
         );
-        // Idempotent.
         link_shared_from(&global, &profile);
     }
 
