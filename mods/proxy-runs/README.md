@@ -46,8 +46,11 @@ A Claude Code mod (function-hooks plugin, Claude Code 2.1.287+) that makes
   fails, is killed or asks something, it appends a notice row and submits a
   prompt with the result or the question, which starts a turn once the session
   is idle, like a background subagent's task notification. What was told comes
-  from `claude-proxy news`, which keeps it on disk: a session reopened after
-  Claude was closed is told, in one message, what its runs did meanwhile.
+  from `claude-proxy news`, which keeps it on disk. A session reopened after
+  Claude was closed runs no turn until it gets input, so the mod shows what its
+  runs did meanwhile as a notice and in the status line, and your next message
+  carries the details to Claude; it counts as told only once that message
+  entered.
 - **Agent calls redirected.** A `tool.call` hook on Agent (and Task) refuses
   the call and points to the tool, unless the description starts with
   `[direct]`, `CLAUDE_PROXY_POLICY=off`, or `CLAUDE_PROXY_RUN` is set.

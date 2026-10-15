@@ -17,7 +17,9 @@ has its own version and first shipped in 0.8.0.
   not told yet, each finished turn and each question once, kept on disk.
 - A session reopened after Claude was closed hears what its runs did
   meanwhile: the plugin's session-start hook lists finished runs, and the
-  proxy-runs mod wakes the session once with all of it.
+  proxy-runs mod shows them (a notice and the status line) and hands their
+  details to Claude with the next message. Nothing counts as told before it
+  reached the session (`news --peek`, then `--ack`).
 
 - `claude-proxy exclude-auto <name>` / `include-auto <name>`, and
   `add <name> --no-auto`: keep an account (or the primary `claude`) out of

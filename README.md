@@ -231,9 +231,10 @@ skips Claude's startup. Then both exit, so an idle run costs nothing.
 That background process runs in a session of its own, apart from whatever
 started it, so closing the terminal or Claude Desktop does not stop a run. When
 the session that started it opens again, it hears what finished meanwhile: the
-plugin's session-start hook lists it, and the mod wakes the session with one
-message for all of it. What a session was told is kept on disk
-(`claude-proxy news`), so nothing is told twice.
+plugin's session-start hook lists it, and the mod shows it on screen and hands
+the details to Claude with your next message. What a session was told is kept
+on disk (`claude-proxy news`), so nothing is told twice, and nothing counts as
+told before it reached the session.
 
 ### Failover
 

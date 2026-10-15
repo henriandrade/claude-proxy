@@ -570,43 +570,33 @@ test('without process access the marker is turned off instead', async ($, on) =>
   expect(w.files[MARKER]).toBe('off')
 })
 
-test('a reopened session hears in one prompt what its runs did while it was closed', async ($, on) => {
+test('a reopened session is shown what its runs did, and the next prompt brings it to Claude', async ($, on) => {
   const w = world(on)
-  const submitted: string[] = []
-  let woke = () => {}
-  const prompted = new Promise<void>(resolve => (woke = resolve))
-  on('prompt.submit', ($, e) => (submitted.push(e.text), woke(), { text: e.text }) as never)
+  const entered: { text: string; context?: readonly string[] }[] = []
+  on('prompt.submit', ($, e) => (entered.push({ text: e.text, context: e.context }), { text: e.text, context: e.context }) as never)
   w.news = [
     { ...RUN, state: 'idle', last_result: { text: 'all green', ok: true }, mark: 'abc123 idle 1' },
     { ...RUN, id: 'def456', name: 'tidy', state: 'waiting', asks: [{ tool: 'Bash', input: { command: 'rm x' } }], mark: 'def456 waiting k1' },
   ]
   await start($)
-  await prompted
-  expect(w.newsEnv[0]).toEqual({ CLAUDE_CODE_SESSION_ID: SESSION })
-  expect(submitted).toHaveLength(1)
-  expect(submitted[0]).toContain('abc123 (say ok) is idle')
-  expect(submitted[0]).toContain('all green')
-  expect(submitted[0]).toContain('def456 (tidy) is waiting for an answer')
-  for (let i = 0; i < 50; i++) await Promise.resolve()
-  expect(w.argvs.find(a => a[1] === 'news' && a[2] === '--json')).toEqual(['claude-proxy', 'news', '--json', '--peek'])
-  expect(w.argvs.find(a => a[2] === '--ack')).toEqual(['claude-proxy', 'news', '--ack', 'abc123 idle 1', 'def456 waiting k1'])
+  for (let i = 0; i < 200 && !w.statuses.includes('2 runs finished while closed'); i++) await Promise.resolve()
+  expect(w.statuses).toContain('2 runs finished while closed')
+  expect(entered).toHaveLength(0)
+  expect(w.argvs.some(a => a[2] === '--ack')).toBe(false)
 
-  const ui = await $.ui.mount({
-    plugin: 'proxy-runs',
-    surface: 'desktop',
-    component: 'UserMessage',
-    requestId: 'm2',
-    props: { text: submitted[0] ?? '', origin: { kind: 'plugin', name: 'proxy-runs' }, isExpanded: true },
-  })
-  expect((await ui.find({ type: 'Text', text: /finished/ }))?.text).toBe('✓ say ok finished · abc123 on claude-personal')
-  expect((await ui.find({ type: 'Text', text: /needs an answer/ }))?.text).toContain('tidy needs an answer')
-  await ui.unmount()
+  await $.prompt.submit({ text: 'what happened?', origin: { kind: 'composer' }, wait: false } as never)
+  expect(entered.at(-1)?.text).toBe('what happened?')
+  const context = entered.at(-1)?.context?.join('\n') ?? ''
+  expect(context).toContain('abc123 (say ok) is idle')
+  expect(context).toContain('all green')
+  expect(context).toContain('def456 (tidy) is waiting for an answer')
+  expect(w.argvs.find(a => a[2] === '--ack')).toEqual(['claude-proxy', 'news', '--ack', 'abc123 idle 1', 'def456 waiting k1'])
 })
 
 test('with nothing new, a reopened session is not woken', async ($, on) => {
   const w = world(on)
   const submitted: string[] = []
-  on('prompt.submit', ($, e) => (submitted.push(e.text), { text: e.text }) as never)
+  on('prompt.submit', ($, e) => (submitted.push(e.text), { text: e.text, context: e.context }) as never)
   w.news = []
   const newsAsked = new Promise<void>(resolve => (asked = resolve))
   await start($)

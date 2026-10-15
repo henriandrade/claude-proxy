@@ -262,28 +262,54 @@ async function tell($: Engine, news: ProxyRunsRun[]): Promise<void> {
   })
 }
 
+type News = ProxyRunsRun & { mark: string }
+
 const delivered = new Set<string>()
 
-// `claude-proxy news` keeps what was told on disk, shared with quota-router's
-// hooks, so runs that finished while Claude was closed are told on reopening.
-// Marked told only once the prompt carrying it starts a turn: a session that
-// ends first (`claude -p`) hears it next time. False when it cannot answer
-// (no process access, an older claude-proxy).
-async function tellNews($: Engine): Promise<boolean> {
-  const env = { CLAUDE_CODE_SESSION_ID: await $.session.id() }
-  const out = await cli($, ['news', '--json', '--peek'], { env })
-  if (out?.exitCode !== 0) return false
-  const news = (JSON.parse(out.stdout) as (ProxyRunsRun & { mark: string })[]).filter(
+// `claude-proxy news` keeps what a session was told on disk, shared with
+// quota-router's hooks. It is read without marking and acknowledged only once
+// delivered, so news a session never got to see stays untold. Undefined when
+// it cannot answer (no process access, an older claude-proxy).
+async function untold($: Engine): Promise<News[] | undefined> {
+  const out = await cli($, ['news', '--json', '--peek'], { env: { CLAUDE_CODE_SESSION_ID: await $.session.id() } })
+  if (out?.exitCode !== 0) return undefined
+  const news = (JSON.parse(out.stdout) as News[]).filter(
     r => validId(r.id) && typeof r.mark === 'string' && !delivered.has(r.mark),
   )
+  for (const run of news) await update($, runs, all => [...all.filter(r => r.id !== run.id), run])
+  return news
+}
+
+async function acknowledge($: Engine, news: News[]): Promise<void> {
+  await cli($, ['news', '--ack', ...news.map(r => r.mark)], { env: { CLAUDE_CODE_SESSION_ID: await $.session.id() } })
+}
+
+// Live, while the session is open: a prompt of its own wakes it.
+async function tellNews($: Engine): Promise<boolean> {
+  const news = await untold($)
+  if (news === undefined) return false
   if (news.length === 0) return true
-  for (const run of news) {
-    delivered.add(run.mark)
-    await update($, runs, all => [...all.filter(r => r.id !== run.id), run])
-  }
+  for (const run of news) delivered.add(run.mark)
   await tell($, news)
-  await cli($, ['news', '--ack', ...news.map(r => r.mark)], { env })
+  await acknowledge($, news)
   return true
+}
+
+// On reopening, a session runs no turn until it gets input, so a prompt of the
+// mod's own would be lost: say so on screen, and hand it to the next prompt.
+async function announceNews($: Engine): Promise<void> {
+  const news = await untold($)
+  if (!news?.length) return
+  const what = news.map(r => `${label(r)} ${r.state === 'waiting' ? 'is waiting for an answer' : `is ${r.state}`}`)
+  await $.session
+    .append({
+      message: {
+        type: 'system',
+        content: [{ type: 'text', text: `While this session was closed: ${what.join('; ')}. Your next message brings Claude the details.` }],
+      },
+    })
+    .catch(err => $.ui.log(`proxy-runs: notice not appended: ${err}`, { to: 'debug' }))
+  $.ui.status(`${news.length} run${news.length === 1 ? '' : 's'} finished while closed`)
 }
 
 async function onEvent($: Engine, line: string): Promise<void> {
@@ -323,7 +349,7 @@ async function watch($: Engine, session: string): Promise<void> {
     await update($, runs, () => list)
     $.ui.status(counter(list))
     for (const r of list) if (r.session !== session && ACTIVE.includes(r.state)) void follow($, r.id)
-    await tellNews($).catch(err => $.ui.log(`proxy-runs: news: ${err}`, { to: 'debug' }))
+    await announceNews($).catch(err => $.ui.log(`proxy-runs: news: ${err}`, { to: 'debug' }))
   }
   let rest = ''
   const events = $.process.spawn({
@@ -646,7 +672,21 @@ export const register: Register = on => {
   on('prompt.submit', async ($, e, next) => {
     await markSession($)
     const id = await read($, talking)
-    if (!id || !TYPED.includes(e.origin.kind)) return next(e)
+    if (!TYPED.includes(e.origin.kind)) return next(e)
+    if (!id) {
+      const news = await untold($).catch(() => undefined)
+      if (!news?.length) return next(e)
+      for (const run of news) delivered.add(run.mark)
+      const context = news.map(run => (run.state === 'waiting' ? askText(run) : doneText(run))).join('\n\n')
+      const entered = await next({ ...e, context: [...(e.context ?? []), context] })
+      if (entered.drop === undefined) {
+        await acknowledge($, news)
+        $.ui.status(counter(await read($, runs)))
+      } else {
+        for (const run of news) delivered.delete(run.mark)
+      }
+      return entered
+    }
     const run = (await read($, runs)).find(r => r.id === id)
     const question = run?.state === 'waiting' && run.asks.some(a => a.tool === 'AskUserQuestion')
     const argv = question ? ['answer', id, ...e.text.split('|').map(s => s.trim())] : ['send', id, e.text]
