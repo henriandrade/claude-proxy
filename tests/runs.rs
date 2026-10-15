@@ -1010,6 +1010,7 @@ fn hooks_tell_a_session_about_its_runs() {
     let session = "22222222-2222-4333-8444-555555555555";
     let mine = [("CLAUDE_CODE_SESSION_ID", session)];
     let prompt = format!(r#"{{"session_id":"{session}","permission_mode":"default"}}"#);
+    hook(&env, "session-start", &prompt);
 
     let done = stdout(&run_as(
         &env,
@@ -1615,6 +1616,8 @@ fn news_tells_a_session_each_finished_turn_once() {
     let news = |vars: &[(&str, &str)]| -> Vec<Value> {
         serde_json::from_str(&stdout(&run_as(&env, exe, &["news", "--json"], vars))).unwrap()
     };
+    // The session asks once when it starts, which begins its record.
+    assert!(news(&mine).is_empty());
 
     let id = stdout(&run_as(
         &env,
@@ -1648,6 +1651,8 @@ fn a_reopened_session_hears_what_finished_while_it_was_closed() {
     let env = setup();
     let exe = Path::new(env!("CARGO_BIN_EXE_claude-proxy"));
     let session = "88888888-8888-4888-8888-888888888888";
+    let started = format!(r#"{{"session_id":"{session}","source":"startup"}}"#);
+    assert!(stdout(&hook(&env, "session-start", &started)).is_empty());
     let id = stdout(&run_as(
         &env,
         exe,
@@ -1661,4 +1666,29 @@ fn a_reopened_session_hears_what_finished_while_it_was_closed() {
     assert!(first.contains("finished since it was last told"), "{first}");
     assert!(first.contains(&format!("{id} (away) is idle")), "{first}");
     assert!(stdout(&hook(&env, "session-start", &input)).is_empty());
+}
+
+#[test]
+fn a_session_from_before_records_is_not_retold_its_old_runs() {
+    let env = setup();
+    let exe = Path::new(env!("CARGO_BIN_EXE_claude-proxy"));
+    let mine = [(
+        "CLAUDE_CODE_SESSION_ID",
+        "99999999-9999-4999-8999-999999999999",
+    )];
+    let id = stdout(&run_as(
+        &env,
+        exe,
+        &["run", "--account", "claude", "hi"],
+        &mine,
+    ));
+    cp(&env, &["wait", &id, "--timeout", "30"]);
+    settled(&env, &id);
+    assert_eq!(stdout(&run_as(&env, exe, &["news", "--json"], &mine)), "[]");
+    run_as(&env, exe, &["send", &id, "again"], &mine);
+    cp(&env, &["wait", &id, "--timeout", "30"]);
+    settled(&env, &id);
+    let later: Vec<Value> =
+        serde_json::from_str(&stdout(&run_as(&env, exe, &["news", "--json"], &mine))).unwrap();
+    assert_eq!(later.len(), 1, "{later:?}");
 }

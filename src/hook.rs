@@ -117,12 +117,12 @@ pub(crate) fn untold(session: &str, waiting_once: bool) -> Vec<(Meta, State)> {
     }
     let all = runs::list();
     let mine = runs::of_session(&all, session);
-    if mine.is_empty() {
-        return Vec::new();
-    }
     let told_file = config_dir()
         .join("sessions")
         .join(format!("{session}.told"));
+    // No record yet (a session from before records were kept): start one quietly
+    // rather than retell runs it may already have handled.
+    let first = !told_file.exists();
     let told = fs::read_to_string(&told_file).unwrap_or_default();
     let mut now_told = Vec::new();
     let news = all
@@ -142,7 +142,7 @@ pub(crate) fn untold(session: &str, waiting_once: bool) -> Vec<(Meta, State)> {
             };
             let new = !told.lines().any(|l| l == mark);
             now_told.push(mark);
-            (new || (state == State::Waiting && !waiting_once)).then_some((m, state))
+            ((new && !first) || (state == State::Waiting && !waiting_once)).then_some((m, state))
         })
         .collect();
     let dir = config_dir().join("sessions");
