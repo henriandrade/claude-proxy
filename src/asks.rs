@@ -22,6 +22,10 @@ pub struct Ask {
 }
 
 impl Ask {
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+
     pub fn is_question(&self) -> bool {
         self.tool == "AskUserQuestion"
     }

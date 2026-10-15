@@ -1539,3 +1539,126 @@ fn naming_an_account_left_out_of_auto_still_runs_on_it() {
     );
     assert_eq!(status(&env, &id)["account"], "acct-a");
 }
+
+#[test]
+fn a_run_has_a_session_of_its_own_and_outlives_whatever_started_it() {
+    use std::os::unix::process::CommandExt;
+    let env = setup();
+    let id_file = env.home.join("id");
+    let mut starter = Command::new("/bin/sh")
+        .args([
+            "-c",
+            &format!(
+                "\"$0\" run --account claude 'nap then answer' > '{}'; sleep 30",
+                id_file.display()
+            ),
+            env!("CARGO_BIN_EXE_claude-proxy"),
+        ])
+        .env_clear()
+        .env("HOME", &env.home)
+        .env("XDG_CONFIG_HOME", env.home.join(".config"))
+        .env("PATH", &env.path)
+        .env("FAKE_LOG", &env.log)
+        .env("FAKE_ARGS_LOG", &env.args_log)
+        .env("CLAUDE_PROXY_IDLE_SECS", "0")
+        .current_dir(&env.home)
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    wait_until("the run started", || {
+        std::fs::read_to_string(&id_file).is_ok_and(|s| !s.trim().is_empty())
+    });
+    let id = std::fs::read_to_string(&id_file)
+        .unwrap()
+        .trim()
+        .to_string();
+    let found = Command::new("pgrep")
+        .args(["-f", &format!("claude-proxy __drain {id}")])
+        .output()
+        .unwrap();
+    let drainer: i32 = String::from_utf8_lossy(&found.stdout)
+        .lines()
+        .next()
+        .expect("a drainer for the run")
+        .trim()
+        .parse()
+        .unwrap();
+    // SAFETY: getsid only reads; killpg only signals the starter's group.
+    let (ours, its) = unsafe { (libc::getsid(0), libc::getsid(drainer)) };
+    assert_eq!(its, drainer, "the drainer leads its own session");
+    assert_ne!(its, ours);
+
+    unsafe { libc::killpg(starter.id() as i32, libc::SIGKILL) };
+    let _ = starter.wait();
+    let out = cp(&env, &["wait", &id, "--timeout", "30"]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        stdout(&cp(&env, &["read", &id]))
+    );
+    assert_eq!(stdout(&out), "echo: nap then answer");
+}
+
+#[test]
+fn news_tells_a_session_each_finished_turn_once() {
+    let env = setup();
+    let exe = Path::new(env!("CARGO_BIN_EXE_claude-proxy"));
+    let mine = [(
+        "CLAUDE_CODE_SESSION_ID",
+        "66666666-6666-4666-8666-666666666666",
+    )];
+    let other = [(
+        "CLAUDE_CODE_SESSION_ID",
+        "77777777-7777-4777-8777-777777777777",
+    )];
+    let news = |vars: &[(&str, &str)]| -> Vec<Value> {
+        serde_json::from_str(&stdout(&run_as(&env, exe, &["news", "--json"], vars))).unwrap()
+    };
+
+    let id = stdout(&run_as(
+        &env,
+        exe,
+        &["run", "--account", "claude", "hi"],
+        &mine,
+    ));
+    cp(&env, &["wait", &id, "--timeout", "30"]);
+    settled(&env, &id);
+    let first = news(&mine);
+    assert_eq!(first.len(), 1, "{first:?}");
+    assert_eq!(first[0]["id"], id.as_str());
+    assert_eq!(first[0]["state"], "idle");
+    assert_eq!(first[0]["last_result"]["text"], "echo: hi");
+    assert!(news(&mine).is_empty());
+    assert!(news(&other).is_empty());
+
+    run_as(&env, exe, &["send", &id, "again"], &mine);
+    cp(&env, &["wait", &id, "--timeout", "30"]);
+    settled(&env, &id);
+    let second = news(&mine);
+    assert_eq!(second.len(), 1, "{second:?}");
+    assert_eq!(second[0]["turns"], 2);
+
+    let missing = run_as(&env, exe, &["news", "--json"], &[]);
+    assert_eq!(missing.status.code(), Some(1));
+}
+
+#[test]
+fn a_reopened_session_hears_what_finished_while_it_was_closed() {
+    let env = setup();
+    let exe = Path::new(env!("CARGO_BIN_EXE_claude-proxy"));
+    let session = "88888888-8888-4888-8888-888888888888";
+    let id = stdout(&run_as(
+        &env,
+        exe,
+        &["run", "--account", "claude", "--name", "away", "hi"],
+        &[("CLAUDE_CODE_SESSION_ID", session)],
+    ));
+    cp(&env, &["wait", &id, "--timeout", "30"]);
+    settled(&env, &id);
+    let input = format!(r#"{{"session_id":"{session}","source":"resume"}}"#);
+    let first = stdout(&hook(&env, "session-start", &input));
+    assert!(first.contains("finished since it was last told"), "{first}");
+    assert!(first.contains(&format!("{id} (away) is idle")), "{first}");
+    assert!(stdout(&hook(&env, "session-start", &input)).is_empty());
+}

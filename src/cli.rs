@@ -216,6 +216,13 @@ enum Command {
         #[arg(long)]
         mine: bool,
     },
+    /// What this Claude session's runs did that it has not been told yet: each
+    /// finished turn once, each pending question once. Marks them told.
+    News {
+        /// Each run as `status --json` prints it.
+        #[arg(long)]
+        json: bool,
+    },
     /// Stop a run's current turn. Queued messages are kept; `send` resumes.
     Kill { id: String },
     /// Delete a run that is not working, and its clean worktree.
@@ -317,6 +324,7 @@ fn dispatch(command: Command) -> Result<i32, String> {
         Command::Answer { id, answers } => crate::agents::reply(&id, Reply::Answer(answers)),
         Command::Attach { id } => crate::agents::attach(&id),
         Command::Events { ids, mine } => crate::agents::events(&ids, mine),
+        Command::News { json } => crate::agents::news(json),
         Command::Kill { id } => crate::agents::kill(&id),
         Command::Rm { id } => crate::agents::rm(&id),
         Command::Drain { id } => crate::drainer::drain(&id).map(|()| 0),

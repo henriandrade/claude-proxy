@@ -244,24 +244,47 @@ function doneText(run: ProxyRunsRun): string {
   )
 }
 
+/** One prompt for every run with news, so a session reopened to many finished runs wakes once. */
+async function tell($: Engine, news: ProxyRunsRun[]): Promise<void> {
+  if (news.length === 0) return
+  for (const run of news) {
+    await $.session
+      .append({
+        message: {
+          type: 'system',
+          content: [{ type: 'text', text: `run ${label(run)} · ${run.state} on ${run.account}` }],
+        },
+      })
+      .catch(err => $.ui.log(`proxy-runs: notice not appended: ${err}`, { to: 'debug' }))
+  }
+  await $.prompt.submit({
+    text: news.map(run => (run.state === 'waiting' ? askText(run) : doneText(run))).join('\n\n'),
+  })
+}
+
+// `claude-proxy news` keeps what was told on disk, shared with quota-router's
+// hooks, so runs that finished while Claude was closed are told on reopening.
+// False when it cannot answer (no process access, an older claude-proxy).
+async function tellNews($: Engine): Promise<boolean> {
+  const out = await cli($, ['news', '--json'], { env: { CLAUDE_CODE_SESSION_ID: await $.session.id() } })
+  if (out?.exitCode !== 0) return false
+  const news = (JSON.parse(out.stdout) as ProxyRunsRun[]).filter(r => validId(r.id))
+  for (const run of news) await update($, runs, all => [...all.filter(r => r.id !== run.id), run])
+  await tell($, news)
+  return true
+}
+
 async function onEvent($: Engine, line: string): Promise<void> {
   const id = line.split(' ')[0]
   if (!id) return
   const run = await refresh($, id)
   if (!run || !(DONE.includes(run.state) || run.state === 'waiting')) return
+  if (await tellNews($)) return
   const mine = Object.values(await read($, calls)).includes(id)
   const mark = `${run.state} ${run.turns}`
   if (!mine || (await read($, told))[id] === mark) return
   await update($, told, all => ({ ...all, [id]: mark }))
-  await $.session
-    .append({
-      message: {
-        type: 'system',
-        content: [{ type: 'text', text: `run ${label(run)} · ${run.state} on ${run.account}` }],
-      },
-    })
-    .catch(err => $.ui.log(`proxy-runs: notice not appended: ${err}`, { to: 'debug' }))
-  await $.prompt.submit({ text: run.state === 'waiting' ? askText(run) : doneText(run) })
+  await tell($, [run])
 }
 
 const safely = ($: Engine, line: string) =>
@@ -288,6 +311,7 @@ async function watch($: Engine, session: string): Promise<void> {
     await update($, runs, () => list)
     $.ui.status(counter(list))
     for (const r of list) if (r.session !== session && ACTIVE.includes(r.state)) void follow($, r.id)
+    await tellNews($).catch(err => $.ui.log(`proxy-runs: news: ${err}`, { to: 'debug' }))
   }
   let rest = ''
   const events = $.process.spawn({
@@ -709,25 +733,29 @@ export const register: Register = on => {
     const { origin, text, isExpanded } = e.props
     if (origin.kind !== 'plugin' || origin.name !== 'proxy-runs') return next(e)
     if (e.surface === 'terminal' && isExpanded) return next(e)
-    const id = /^claude-proxy run (\S+)/.exec(text)?.[1]
-    if (!id) return next(e)
+    const notices = text.split(/\n\n(?=claude-proxy run [A-Za-z0-9]+ )/)
+    if (!notices.every(n => /^claude-proxy run [A-Za-z0-9]+ /.test(n))) return next(e)
     const { Box, Text, Markdown } = $.ui.resolve(e)
-    const run = (await read($, runs)).find(r => r.id === id)
-    const name = run?.name ?? `Run ${id}`
-    const header = text.split('\n', 1)[0] ?? ''
-    if (/ is waiting for an answer/.test(header)) {
-      const ask = /\n- (.+)/.exec(text)?.[1] ?? ''
-      return <Text color="yellow">? {name} needs an answer{ask ? ` · ${ask.slice(0, 200)}` : ''}</Text>
-    }
-    const [, state = '', account = ''] = / is (idle|failed|killed) on (\S+)/.exec(header) ?? []
-    const result = /<run-result>\n([\s\S]*?)\n<\/run-result>/.exec(text)?.[1] ?? ''
-    const line = `${name} ${state === 'idle' ? 'finished' : state || 'stopped'} · ${id}${account ? ` on ${account}` : ''}`
-    return (
-      <Box flexDirection="column">
-        {state === 'idle' ? <Text dimColor>✓ {line}</Text> : <Text color="red">✗ {line}</Text>}
-        {result && result !== '(no result)' && <Markdown text={clean(result)} />}
-      </Box>
-    )
+    const known = await read($, runs)
+    const rows = notices.map(notice => {
+      const id = /^claude-proxy run (\S+)/.exec(notice)?.[1] ?? ''
+      const name = known.find(r => r.id === id)?.name ?? `Run ${id}`
+      const header = notice.split('\n', 1)[0] ?? ''
+      if (/ is waiting for an answer/.test(header)) {
+        const ask = /\n- (.+)/.exec(notice)?.[1] ?? ''
+        return <Text color="yellow">? {name} needs an answer{ask ? ` · ${ask.slice(0, 200)}` : ''}</Text>
+      }
+      const [, state = '', account = ''] = / is (idle|failed|killed) on (\S+)/.exec(header) ?? []
+      const result = /<run-result>\n([\s\S]*?)\n<\/run-result>/.exec(notice)?.[1] ?? ''
+      const line = `${name} ${state === 'idle' ? 'finished' : state || 'stopped'} · ${id}${account ? ` on ${account}` : ''}`
+      return (
+        <Box flexDirection="column">
+          {state === 'idle' ? <Text dimColor>✓ {line}</Text> : <Text color="red">✗ {line}</Text>}
+          {result && result !== '(no result)' && <Markdown text={clean(result)} />}
+        </Box>
+      )
+    })
+    return rows.length === 1 && rows[0] ? rows[0] : <Box flexDirection="column" gap={1}>{rows}</Box>
   })
 
   on('command.run', { command: 'runs' }, async ($, e) => {

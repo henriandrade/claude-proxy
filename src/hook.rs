@@ -44,6 +44,11 @@ pub fn run(event: &str) -> i32 {
         }
         "session-start" => {
             if let (true, Some(session)) = (policy_applies(), v["session_id"].as_str()) {
+                if speaks {
+                    if let Some(done) = finished_while_away(session) {
+                        println!("{done}");
+                    }
+                }
                 if let Some(going) = runs_still_going(session) {
                     println!("{going}");
                 }
@@ -102,50 +107,85 @@ fn first_ask(m: &Meta) -> String {
         .unwrap_or_default()
 }
 
-fn news_since_last_prompt(session: &str) -> Option<String> {
+/// This session's runs with something it has not been told: each finished
+/// turn once, and a run waiting for an answer every time, or once per question
+/// with `waiting_once`. The marks live on disk, so a session reopened after
+/// Claude was closed still hears what happened meanwhile.
+pub(crate) fn untold(session: &str, waiting_once: bool) -> Vec<(Meta, State)> {
     if !crate::paths::valid_id(session) {
-        return None;
+        return Vec::new();
     }
     let all = runs::list();
     let mine = runs::of_session(&all, session);
     if mine.is_empty() {
-        return None;
+        return Vec::new();
     }
-    // Each finished turn is told once: remember what was told.
     let told_file = config_dir()
         .join("sessions")
         .join(format!("{session}.told"));
     let told = fs::read_to_string(&told_file).unwrap_or_default();
     let mut now_told = Vec::new();
-    let lines: Vec<String> = all
-        .iter()
+    let news = all
+        .into_iter()
         .filter(|m| mine.contains(&m.id))
-        .filter_map(|m| match runs::effective_state(m) {
-            State::Waiting => Some(format!(
-                "- {} is waiting for an answer: {}",
-                label(m),
-                first_ask(m)
-            )),
-            s @ (State::Idle | State::Failed | State::Killed) => {
-                let mark = format!("{} {} {}", m.id, s.as_str(), m.turns);
-                let new = !told.lines().any(|l| l == mark);
-                now_told.push(mark);
-                new.then(|| {
-                    format!(
-                        "- {} is {} — `claude-proxy result {}`",
-                        label(m),
-                        s.as_str(),
-                        m.id
-                    )
-                })
-            }
-            _ => None,
+        .filter_map(|m| {
+            let state = runs::effective_state(&m);
+            let mark = match state {
+                State::Waiting => {
+                    let asks = crate::asks::pending(&runs::run_dir(&m.id));
+                    format!("{} waiting {}", m.id, asks.first().map_or("", |a| a.key()))
+                }
+                State::Idle | State::Failed | State::Killed => {
+                    format!("{} {} {}", m.id, state.as_str(), m.turns)
+                }
+                _ => return None,
+            };
+            let new = !told.lines().any(|l| l == mark);
+            now_told.push(mark);
+            (new || (state == State::Waiting && !waiting_once)).then_some((m, state))
         })
         .collect();
-    let _ = crate::paths::write_atomic(&told_file, now_told.join("\n").as_bytes(), 0o600);
+    let dir = config_dir().join("sessions");
+    let _ = crate::paths::private_dir(&dir).and_then(|()| {
+        crate::paths::write_atomic(&told_file, now_told.join("\n").as_bytes(), 0o600)
+    });
+    news
+}
+
+fn news_lines(news: &[(Meta, State)]) -> Vec<String> {
+    news.iter()
+        .map(|(m, state)| match state {
+            State::Waiting => format!("- {} is waiting for an answer: {}", label(m), first_ask(m)),
+            s => format!(
+                "- {} is {} — `claude-proxy result {}`",
+                label(m),
+                s.as_str(),
+                m.id
+            ),
+        })
+        .collect()
+}
+
+fn news_since_last_prompt(session: &str) -> Option<String> {
+    let lines = news_lines(&untold(session, false));
     (!lines.is_empty()).then(|| {
         format!(
             "claude-proxy: runs this session started, since your last message:\n{}",
+            lines.join("\n")
+        )
+    })
+}
+
+/// Waiting runs are left to the still-going list, which names them anyway.
+fn finished_while_away(session: &str) -> Option<String> {
+    let finished: Vec<_> = untold(session, true)
+        .into_iter()
+        .filter(|(_, state)| *state != State::Waiting)
+        .collect();
+    let lines = news_lines(&finished);
+    (!lines.is_empty()).then(|| {
+        format!(
+            "claude-proxy: runs this session started finished since it was last told:\n{}",
             lines.join("\n")
         )
     })

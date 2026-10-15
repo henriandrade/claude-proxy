@@ -25,6 +25,8 @@ const ok = (stdout: string): { value: ProcessRunResult } => ({
 })
 
 type World = {
+  news: object[] | null
+  newsEnv: (Record<string, string> | undefined)[]
   argvs: string[][]
   stdins: (string | undefined)[]
   status: object
@@ -72,11 +74,15 @@ const EVENTS_JSONL = [
   .map(e => JSON.stringify(e))
   .join('\n')
 
+let asked = () => {}
+
 function world(on: On, events: string[] = [], env: Record<string, string> = {}): World {
   const w: World = {
     argvs: [],
     stdins: [],
     status: RUN,
+    news: null,
+    newsEnv: [],
     list: [],
     events,
     tools: [],
@@ -119,6 +125,14 @@ function world(on: On, events: string[] = [], env: Record<string, string> = {}):
     }
     if (cmd === 'run' || cmd === 'status') return ok(JSON.stringify(w.status))
     if (cmd === 'runs') return ok(JSON.stringify(w.list))
+    if (cmd === 'news') {
+      w.newsEnv.push(e.init?.env as Record<string, string> | undefined)
+      asked()
+      if (w.news === null) {
+        return { value: { exitCode: 2, stdout: '', stderr: "unrecognized subcommand 'news'", isStdoutTruncated: false, isStderrTruncated: false } }
+      }
+      return ok(JSON.stringify(w.news))
+    }
     if (cmd === 'read') return ok(EVENTS_JSONL)
     return ok(`${cmd} done`)
   })
@@ -553,4 +567,47 @@ test('without process access the marker is turned off instead', async ($, on) =>
   w.noProcess = true
   await $.session.end({ reason: 'other', sessionId: SESSION } as never)
   expect(w.files[MARKER]).toBe('off')
+})
+
+test('a reopened session hears in one prompt what its runs did while it was closed', async ($, on) => {
+  const w = world(on)
+  const submitted: string[] = []
+  let woke = () => {}
+  const prompted = new Promise<void>(resolve => (woke = resolve))
+  on('prompt.submit', ($, e) => (submitted.push(e.text), woke(), { text: e.text }) as never)
+  w.news = [
+    { ...RUN, state: 'idle', last_result: { text: 'all green', ok: true } },
+    { ...RUN, id: 'def456', name: 'tidy', state: 'waiting', asks: [{ tool: 'Bash', input: { command: 'rm x' } }] },
+  ]
+  await start($)
+  await prompted
+  expect(w.newsEnv[0]).toEqual({ CLAUDE_CODE_SESSION_ID: SESSION })
+  expect(submitted).toHaveLength(1)
+  expect(submitted[0]).toContain('abc123 (say ok) is idle')
+  expect(submitted[0]).toContain('all green')
+  expect(submitted[0]).toContain('def456 (tidy) is waiting for an answer')
+
+  const ui = await $.ui.mount({
+    plugin: 'proxy-runs',
+    surface: 'desktop',
+    component: 'UserMessage',
+    requestId: 'm2',
+    props: { text: submitted[0] ?? '', origin: { kind: 'plugin', name: 'proxy-runs' }, isExpanded: true },
+  })
+  expect((await ui.find({ type: 'Text', text: /finished/ }))?.text).toBe('✓ say ok finished · abc123 on claude-personal')
+  expect((await ui.find({ type: 'Text', text: /needs an answer/ }))?.text).toContain('tidy needs an answer')
+  await ui.unmount()
+})
+
+test('with nothing new, a reopened session is not woken', async ($, on) => {
+  const w = world(on)
+  const submitted: string[] = []
+  on('prompt.submit', ($, e) => (submitted.push(e.text), { text: e.text }) as never)
+  w.news = []
+  const newsAsked = new Promise<void>(resolve => (asked = resolve))
+  await start($)
+  await newsAsked
+  for (let i = 0; i < 50; i++) await Promise.resolve()
+  expect(w.newsEnv).toHaveLength(1)
+  expect(submitted).toHaveLength(0)
 })
