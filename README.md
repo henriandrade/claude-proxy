@@ -126,6 +126,19 @@ claude-proxy: auto → claude-personal (5h 17% (3h34m) · 7d 22% (3d13h))
 `auto` forwards every argument to `claude`. Its pick goes to stderr, so stdout
 stays clean for `-p` output.
 
+Keep an account out of `auto`, for example a client's account you only use on
+purpose:
+
+```console
+$ claude-proxy add claude-client --no-auto   # when adding it
+$ claude-proxy exclude-auto claude-client    # or later; `claude` works for the primary
+$ claude-proxy include-auto claude-client    # let auto use it again
+```
+
+`auto` then skips it when picking, and so does a run's default pool, including
+its failover. Naming it still uses it: its own command (`claude-client`), or
+`claude-proxy run --account claude-client`. `list` marks it `(not in auto)`.
+
 ```console
 $ id=$(claude-proxy run "fix the failing test in src/parser.rs")
 $ claude-proxy watch $id                                 # follow it live

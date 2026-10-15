@@ -9,6 +9,10 @@ use crate::paths::config_dir;
 pub struct Registry {
     #[serde(default)]
     pub labels: Vec<String>,
+    /// Accounts `auto` leaves out: picking, a run's default pool, failover.
+    /// Naming one still uses it. May hold `claude`, the primary.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub not_auto: Vec<String>,
 }
 
 impl Registry {
@@ -53,6 +57,19 @@ impl Registry {
 
     pub fn remove(&mut self, label: &str) {
         self.labels.retain(|l| l != label);
+        self.not_auto.retain(|l| l != label);
+    }
+
+    pub fn in_auto(&self, label: &str) -> bool {
+        !self.not_auto.iter().any(|l| l == label)
+    }
+
+    pub fn set_in_auto(&mut self, label: &str, on: bool) {
+        self.not_auto.retain(|l| l != label);
+        if !on {
+            self.not_auto.push(label.to_string());
+            self.not_auto.sort();
+        }
     }
 }
 
@@ -74,6 +91,32 @@ pub fn valid_label(label: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_registry_from_before_exclusions_keeps_every_account_in_auto() {
+        let r: Registry = serde_json::from_str(r#"{"labels":["a","b"]}"#).unwrap();
+        assert!(r.in_auto("a") && r.in_auto("claude"));
+        assert_eq!(
+            serde_json::to_string(&r).unwrap(),
+            r#"{"labels":["a","b"]}"#
+        );
+    }
+
+    #[test]
+    fn excluding_and_including_an_account_round_trips() {
+        let mut r = Registry::default();
+        r.add("work");
+        r.add("client");
+        r.set_in_auto("client", false);
+        r.set_in_auto("client", false);
+        r.set_in_auto("claude", false);
+        assert_eq!(r.not_auto, ["claude", "client"]);
+        assert!(r.in_auto("work") && !r.in_auto("client"));
+        r.set_in_auto("claude", true);
+        assert_eq!(r.not_auto, ["client"]);
+        r.remove("client");
+        assert!(r.not_auto.is_empty());
+    }
 
     #[test]
     fn valid_labels_are_safe_command_names() {

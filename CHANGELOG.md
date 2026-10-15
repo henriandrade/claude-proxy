@@ -13,6 +13,12 @@ has its own version and first shipped in 0.8.0.
 
 ### Added
 
+- `claude-proxy exclude-auto <name>` / `include-auto <name>`, and
+  `add <name> --no-auto`: keep an account (or the primary `claude`) out of
+  `auto`, a run's default pool and its failover. Naming it still uses it.
+  `list` marks it `(not in auto)`, and `list --json` reports `auto` per
+  account.
+
 - proxy-runs mod: a run picker at the top of the Runs pane, with Talk to it and
   Stop.
 - proxy-runs mod: talk to a run from Claude's prompt box, for one message or one
