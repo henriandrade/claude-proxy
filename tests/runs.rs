@@ -646,7 +646,7 @@ fn a_worktree_run_works_on_its_own_branch_and_is_cleaned_up() {
     cp(&env, &["wait", &id, "--timeout", "30"]);
     let s = status(&env, &id);
     let tree = PathBuf::from(s["worktree"]["path"].as_str().unwrap());
-    assert!(s["cwd"].as_str().unwrap().ends_with("/sub"), "{s}");
+    assert!(Path::new(s["cwd"].as_str().unwrap()).ends_with("sub"), "{s}");
     assert!(tree.join("sub/file.txt").exists());
     assert_eq!(s["worktree"]["branch"], format!("claude-proxy/{id}"));
 
