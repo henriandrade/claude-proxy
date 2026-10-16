@@ -85,6 +85,9 @@ Every session, the desktop app's Code tab included: add the folder to
 }
 ```
 
+On Windows, write the path with forward slashes or doubled backslashes
+(`"C:/src/claude-proxy/mods/proxy-runs"`).
+
 A terminal session reloads the mod when its files change. A desktop session is
 a long-lived headless one and reloads only with `CLAUDE_CODE_PLUGIN_DIR_WATCH=1`.
 Both variables are read when a session's process starts, so a session open
@@ -104,14 +107,15 @@ The two can be enabled together:
 
 - The mod's Agent refusal runs in `tool.call`, above the `PreToolUse` settings
   hooks, so its message (pointing to `mcp__proxy-runs__run`) is the one the
-  model gets; quota-router's shell hook never sees the call.
+  model gets; quota-router's hook never sees the call.
 - At session start (and at each prompt, which covers `/clear`) the mod writes
-  `~/.config/claude-proxy/sessions/<session_id>.mod` with `on`. While that
+  `~/.config/claude-proxy/sessions/<session_id>.mod` with `on` (the config dir
+  is claude-proxy's own: `$XDG_CONFIG_HOME/claude-proxy` when set,
+  `%APPDATA%\claude-proxy` on Windows). While that
   marker reads `on`, `claude-proxy __hook prompt` does not report runs (the mod
   already does) and `__hook pre-tool-use` does not redirect. `session-start`
-  still lists runs in progress. At session end the mod removes the marker
-  (`rm`), or writes `off` where it cannot start a process, since `$.fs` has no
-  delete.
+  still lists runs in progress. At session end the mod writes `off` to the
+  marker, since `$.fs` has no delete.
 - quota-router's SessionStart policy text still tells the model to use
   `claude-proxy run` through Bash; the mod's policy section, later in the
   prompt, says to use the tool instead.

@@ -503,6 +503,9 @@ const COMPOSE = {
   traits: [],
 } as never
 const MARKER = `/home/u/.config/claude-proxy/sessions/${SESSION}.mod`
+/** A written file by its POSIX path; on Windows the engine hands paths over as `D:\\home\\u\\…`. */
+const written = (w: World, path: string) =>
+  Object.entries(w.files).find(([k]) => k.replace(/\\/g, '/').replace(/^[A-Za-z]:/, '') === path)?.[1]
 const agent = (description: string) => ({
   tool: 'Agent' as const,
   tool_use_id: 'ta',
@@ -551,21 +554,21 @@ test('the session marker is on while the session runs and off after', async ($, 
   const w = world(on)
   on('session.end', ($, e) => ({ sessionId: e.sessionId }) as never)
   await start($)
-  expect(w.files[MARKER]).toBe('on')
+  expect(written(w, MARKER)).toBe('on')
   await $.session.end({ reason: 'other', sessionId: SESSION } as never)
-  expect(w.files[MARKER]).toBe('off')
+  expect(written(w, MARKER)).toBe('off')
 })
 
 test('on Windows the marker lives under APPDATA, as the binary has it', async ($, on) => {
   const w = world(on, [], { OS: 'Windows_NT', APPDATA: '/appdata' })
   await start($)
-  expect(w.files[`/appdata/claude-proxy/sessions/${SESSION}.mod`]).toBe('on')
+  expect(written(w, `/appdata/claude-proxy/sessions/${SESSION}.mod`)).toBe('on')
 })
 
 test('XDG_CONFIG_HOME wins everywhere', async ($, on) => {
   const w = world(on, [], { OS: 'Windows_NT', APPDATA: '/appdata', XDG_CONFIG_HOME: '/xdg' })
   await start($)
-  expect(w.files[`/xdg/claude-proxy/sessions/${SESSION}.mod`]).toBe('on')
+  expect(written(w, `/xdg/claude-proxy/sessions/${SESSION}.mod`)).toBe('on')
 })
 
 test('a reopened session is shown what its runs did, and the next prompt brings it to Claude', async ($, on) => {

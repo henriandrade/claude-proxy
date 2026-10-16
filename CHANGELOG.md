@@ -11,6 +11,40 @@ has its own version and first shipped in 0.8.0.
 
 ## [Unreleased]
 
+### Added
+
+- Native Windows support, with every feature macOS has: account commands
+  (`<name>.exe` hardlinks in `%USERPROFILE%\.local\bin`), profiles sharing
+  `~/.claude` through junctions and hardlinks, quota from each profile's
+  `.credentials.json`, managed runs that outlive the terminal or app that
+  started them (detached, out of its Job Object) and that `kill` stops through
+  a Job Object of their own, the permission server, the plugin's hooks and the
+  proxy-runs mod.
+- CI runs the full suite on Windows as well as Linux and macOS: unit tests,
+  the end-to-end runs against a fake Claude (in Git Bash on Windows), the hook
+  tests, and the mod's validation, tests and type check.
+
+### Changed
+
+- The quota-router plugin's hooks run `claude-proxy __hook <event>` directly,
+  with no shell script in between, and the delegation policy is printed by the
+  binary. The plugin now needs a claude-proxy with `__hook` (0.6.0 or later);
+  `hooks/policy.sh` and `hooks/claude-proxy-hook.sh` are gone.
+- On Windows the config dir is `%APPDATA%\claude-proxy` and the home is
+  `%USERPROFILE%`, as Claude Code has it. `XDG_CONFIG_HOME` still wins
+  everywhere, and the mod reads the same places.
+- `claude` is looked up through `PATHEXT` on Windows, so npm's `claude.cmd`
+  works.
+- `claude-proxy list` renews Windows account commands left behind by an
+  upgrade.
+- The proxy-runs mod turns its session marker `off` at session end instead of
+  running `rm`.
+
+### Fixed
+
+- An account whose name holds a dot (`acct.2`) ran as `acct`: only `.exe` is
+  now taken off the command name.
+
 ## [0.9.0] - 2026-10-15
 
 ### Added
