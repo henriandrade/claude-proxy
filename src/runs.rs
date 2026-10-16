@@ -389,6 +389,7 @@ fn spawn_drainer(id: &str) -> Result<(), String> {
         // No console and out of the starter's job, so closing the terminal or
         // the app that started it does not take the run down. A job that
         // forbids breaking away refuses the spawn; then the run stays in it.
+        crate::win::keep_std_handles_private();
         let detached = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP;
         cmd.creation_flags(detached | CREATE_BREAKAWAY_FROM_JOB);
         if cmd.spawn().is_ok() {
