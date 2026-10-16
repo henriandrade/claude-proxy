@@ -343,7 +343,7 @@ fn decide(dir: &Path, id: &str, args: &Value) -> Value {
         runs::notify_parent(&meta, &format!("is waiting for an answer:\n\n{lines}"));
     }
 
-    let parent = parent_id();
+    let parent = Parent::current();
     let answer_path = asks.join(format!("{key}.answer"));
     let answer = loop {
         if let Some(a) = fs::read(&answer_path)
@@ -352,7 +352,7 @@ fn decide(dir: &Path, id: &str, args: &Value) -> Value {
         {
             break a;
         }
-        if dir.join("stop").exists() || parent_id() != parent {
+        if dir.join("stop").exists() || parent.gone() {
             break json!({"behavior": "deny", "message": "The run was stopped."});
         }
         std::thread::sleep(Duration::from_millis(300));
@@ -381,15 +381,24 @@ fn decide(dir: &Path, id: &str, args: &Value) -> Value {
     }
 }
 
+/// Claude, which started this server; the ask is dropped when it exits.
 #[cfg(unix)]
-fn parent_id() -> u32 {
-    std::os::unix::process::parent_id()
+struct Parent(u32);
+
+#[cfg(unix)]
+impl Parent {
+    fn current() -> Parent {
+        Parent(std::os::unix::process::parent_id())
+    }
+
+    /// An orphan is re-parented.
+    fn gone(&self) -> bool {
+        std::os::unix::process::parent_id() != self.0
+    }
 }
 
-#[cfg(not(unix))]
-fn parent_id() -> u32 {
-    0
-}
+#[cfg(windows)]
+use crate::win::Parent;
 
 /// Unique and ordered by posting time, so same-tick asks never overwrite each
 /// other and still list oldest first.

@@ -393,13 +393,23 @@ fn add_cmd(label: &str, no_auto: bool) -> Result<i32, String> {
             "\nNote: {} is not on your PATH. Add it to use the command directly:",
             bin_dir.display()
         );
-        println!("  export PATH=\"{}:$PATH\"", bin_dir.display());
+        if cfg!(windows) {
+            println!(
+                "  [Environment]::SetEnvironmentVariable('Path', \"{};\" + [Environment]::GetEnvironmentVariable('Path', 'User'), 'User')",
+                bin_dir.display()
+            );
+        } else {
+            println!("  export PATH=\"{}:$PATH\"", bin_dir.display());
+        }
     }
     Ok(0)
 }
 
 fn list_cmd(as_json: bool, refresh: bool) -> Result<i32, String> {
     let registry = Registry::load();
+    if let Ok(exe) = std::env::current_exe() {
+        install::refresh(&exe, &install::default_bin_dir(), &registry.labels);
+    }
     let reports = quota::reports(&quota::accounts(), refresh);
     let now = quota::now_secs();
     let pick = quota::choose_among(&reports, now, |r| registry.in_auto(&r.label));
@@ -453,7 +463,7 @@ fn list_cmd(as_json: bool, refresh: bool) -> Result<i32, String> {
         if !registry.in_auto(&r.label) {
             line.push_str("  (not in auto)");
         }
-        if !r.primary && !bin_dir.join(&r.label).exists() {
+        if !r.primary && !install::command_path(&bin_dir, &r.label).exists() {
             line.push_str("  (command missing — `claude-proxy add` to reinstall)");
         }
         println!("{}", line.trim_end());

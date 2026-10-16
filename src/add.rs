@@ -49,8 +49,10 @@ pub fn run(
     eprintln!("Log in with the account you want {label:?} to use (its own browser session),");
     eprintln!("then type /exit (or press Ctrl-C) to finish.\n");
 
+    #[cfg(windows)]
+    crate::win::leave_ctrl_c_to_child();
     // An inherited credential would short-circuit the login.
-    let status = Command::new("claude")
+    let status = Command::new(crate::paths::program("claude"))
         .env("CLAUDE_CONFIG_DIR", &dir)
         .env_remove("CLAUDE_CODE_OAUTH_TOKEN")
         .env_remove("ANTHROPIC_API_KEY")

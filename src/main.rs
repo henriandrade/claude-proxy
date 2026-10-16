@@ -17,6 +17,8 @@ mod registry;
 mod render;
 mod runs;
 mod shared;
+#[cfg(windows)]
+mod win;
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -53,12 +55,20 @@ fn main() {
     std::process::exit(cli::main());
 }
 
+/// Only `.exe` comes off: a label may hold dots (`acct.2`).
 fn basename(arg: &OsString) -> String {
-    let path = PathBuf::from(arg);
-    path.file_stem()
-        .or_else(|| path.file_name())
+    let Some(name) = PathBuf::from(arg)
+        .file_name()
         .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| MANAGER_NAME.to_string())
+    else {
+        return MANAGER_NAME.to_string();
+    };
+    match name.len().checked_sub(4) {
+        Some(cut) if name.is_char_boundary(cut) && name[cut..].eq_ignore_ascii_case(".exe") => {
+            name[..cut].to_string()
+        }
+        _ => name,
+    }
 }
 
 #[cfg(test)]
@@ -79,5 +89,7 @@ mod tests {
             "claude-personal"
         );
         assert_eq!(name_of("claude-personal.exe"), "claude-personal");
+        assert_eq!(name_of("CLAUDE-PROXY.EXE"), "CLAUDE-PROXY");
+        assert_eq!(name_of("/home/me/.local/bin/acct.2"), "acct.2");
     }
 }

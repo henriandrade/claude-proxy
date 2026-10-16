@@ -222,3 +222,24 @@ mod tests {
         assert!(stdin_command("svc", "me", &"x".repeat(5000)).is_none());
     }
 }
+
+#[cfg(all(test, not(target_os = "macos")))]
+mod file_tests {
+    use super::*;
+
+    #[test]
+    fn a_profile_keeps_its_credentials_in_its_own_dir() {
+        let t = tempfile::tempdir().unwrap();
+        let source = source_for(Some(t.path())).unwrap();
+        let Source::File(path) = &source;
+        assert_eq!(path, &t.path().join(".credentials.json"));
+        assert_eq!(read(&source).unwrap(), None);
+        write(&source, r#"{"claudeAiOauth":{}}"#).unwrap();
+        assert_eq!(
+            read(&source).unwrap().as_deref(),
+            Some(r#"{"claudeAiOauth":{}}"#)
+        );
+        let Source::File(primary) = source_for(None).unwrap();
+        assert!(primary.ends_with(Path::new(".claude").join(".credentials.json")));
+    }
+}

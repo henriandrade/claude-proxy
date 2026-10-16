@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/policy.sh\"",
+            "command": "claude-proxy __hook session-start",
             "timeout": 5
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/claude-proxy-hook.sh\" prompt",
+            "command": "claude-proxy __hook prompt",
             "timeout": 5
           }
         ]
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/claude-proxy-hook.sh\" pre-tool-use",
+            "command": "claude-proxy __hook pre-tool-use",
             "timeout": 5
           }
         ]

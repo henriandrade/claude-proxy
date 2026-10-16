@@ -115,10 +115,6 @@ function world(on: On, events: string[] = [], env: Record<string, string> = {}):
     if (w.noProcess) return { deny: 'CLI only' }
     w.argvs.push([...e.argv])
     w.stdins.push(e.init?.stdin)
-    if (e.argv[0] === 'rm') {
-      delete w.files[e.argv[2] ?? '']
-      return ok('')
-    }
     const [, cmd] = e.argv
     if (cmd === 'status' && e.argv[2] !== 'abc123') {
       return { value: { exitCode: 1, stdout: '', stderr: 'no such run', isStdoutTruncated: false, isStderrTruncated: false } }
@@ -551,23 +547,25 @@ test('the policy section tells the model to use the tool', async ($, on) => {
   expect(sections.at(-1)?.text).toContain(`${TOOL} instead of \`claude-proxy run\` through Bash`)
 })
 
-test('the session marker is written at start and removed at end', async ($, on) => {
+test('the session marker is on while the session runs and off after', async ($, on) => {
   const w = world(on)
   on('session.end', ($, e) => ({ sessionId: e.sessionId }) as never)
   await start($)
   expect(w.files[MARKER]).toBe('on')
   await $.session.end({ reason: 'other', sessionId: SESSION } as never)
-  expect(MARKER in w.files).toBe(false)
+  expect(w.files[MARKER]).toBe('off')
 })
 
-test('without process access the marker is turned off instead', async ($, on) => {
-  const w = world(on)
-  mock.clock(on)
-  on('session.end', ($, e) => ({ sessionId: e.sessionId }) as never)
+test('on Windows the marker lives under APPDATA, as the binary has it', async ($, on) => {
+  const w = world(on, [], { OS: 'Windows_NT', APPDATA: '/appdata' })
   await start($)
-  w.noProcess = true
-  await $.session.end({ reason: 'other', sessionId: SESSION } as never)
-  expect(w.files[MARKER]).toBe('off')
+  expect(w.files[`/appdata/claude-proxy/sessions/${SESSION}.mod`]).toBe('on')
+})
+
+test('XDG_CONFIG_HOME wins everywhere', async ($, on) => {
+  const w = world(on, [], { OS: 'Windows_NT', APPDATA: '/appdata', XDG_CONFIG_HOME: '/xdg' })
+  await start($)
+  expect(w.files[`/xdg/claude-proxy/sessions/${SESSION}.mod`]).toBe('on')
 })
 
 test('a reopened session is shown what its runs did, and the next prompt brings it to Claude', async ($, on) => {

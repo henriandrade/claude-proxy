@@ -1,8 +1,7 @@
 //! End-to-end tests of managed runs against a fake `claude` on PATH, in a
-//! throwaway HOME.
-#![cfg(unix)]
+//! throwaway HOME. On Windows the fake runs in Git Bash through a `claude.cmd`,
+//! as npm's Claude Code does.
 
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
@@ -33,7 +32,7 @@ while [ $# -gt 0 ]; do
   shift
 done
 [ -n "$fork" ] && mode="fork:$fork"
-acct=$(basename "${CLAUDE_CONFIG_DIR:-primary}")
+acct=${CLAUDE_CONFIG_DIR:-primary}; acct=${acct##*[/\\]}
 if [ "$acct" = "${FAKE_LOGGED_OUT:-}" ]; then echo 'Not logged in · Please run /login'; exit 1; fi
 while IFS= read -r line; do
   prompt=$(printf '%s\n' "$line" | sed 's/.*"content":"\(.*\)","role":"user".*/\1/')
@@ -66,7 +65,7 @@ while IFS= read -r line; do
         exit 1
       fi ;;
     ask*)
-      cmd=$(sed 's/.*"command":"\([^"]*\)".*/\1/' "$cfg")
+      cmd=$(sed 's/.*"command":"\([^"]*\)".*/\1/' "$cfg" | sed 's/\\\\/\\/g')
       id=$(sed 's/.*"__permit","\([^"]*\)".*/\1/' "$cfg")
       tool=Bash; input='{"command":"rm -rf build"}'
       case "$prompt" in
@@ -98,6 +97,14 @@ struct Env {
     args_log: PathBuf,
 }
 
+/// Git for Windows: its Bash runs the fake, and its tools are on the PATH.
+#[cfg(windows)]
+fn git_root() -> PathBuf {
+    std::env::var_os("CLAUDE_PROXY_TEST_GIT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\Program Files\Git"))
+}
+
 fn setup() -> Env {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");
@@ -107,17 +114,84 @@ fn setup() -> Env {
     let registry = home.join(".config/claude-proxy/registry.json");
     std::fs::create_dir_all(registry.parent().unwrap()).unwrap();
     std::fs::write(&registry, r#"{"labels":["acct-a","acct-b"]}"#).unwrap();
-    let fake = bin.join("claude");
-    std::fs::write(&fake, FAKE_CLAUDE).unwrap();
-    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    #[cfg(unix)]
+    let dirs = {
+        use std::os::unix::fs::PermissionsExt;
+        let fake = bin.join("claude");
+        std::fs::write(&fake, FAKE_CLAUDE).unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        [bin.clone(), "/usr/bin".into(), "/bin".into()]
+    };
+    #[cfg(windows)]
+    let dirs = {
+        std::fs::write(bin.join("claude.sh"), FAKE_CLAUDE).unwrap();
+        std::fs::write(
+            bin.join("claude.cmd"),
+            format!(
+                "@\"{}\" \"%~dp0claude.sh\" %*\r\n@exit /b %errorlevel%\r\n",
+                git_root().join(r"usr\bin\bash.exe").display()
+            ),
+        )
+        .unwrap();
+        let system = PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32");
+        [
+            bin.clone(),
+            git_root().join(r"usr\bin"),
+            git_root().join("cmd"),
+            system,
+        ]
+    };
     Env {
-        path: format!("{}:/usr/bin:/bin", bin.display()),
+        path: std::env::join_paths(dirs)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned(),
         log: tmp.path().join("claude.log"),
         args_log: tmp.path().join("args.log"),
         home,
         bin,
         _tmp: tmp,
     }
+}
+
+/// A clean environment: the throwaway home, the fake on PATH, nothing else of
+/// the caller's but what Windows needs to start processes.
+fn hermetic<'a>(cmd: &'a mut Command, env: &Env) -> &'a mut Command {
+    cmd.env_clear()
+        .env("HOME", &env.home)
+        .env("USERPROFILE", &env.home)
+        .env("XDG_CONFIG_HOME", env.home.join(".config"))
+        .env("PATH", &env.path)
+        .env("FAKE_LOG", &env.log)
+        .env("FAKE_ARGS_LOG", &env.args_log)
+        // Drainers exit at once unless a test asks for a warm one.
+        .env("CLAUDE_PROXY_IDLE_SECS", "0")
+        .current_dir(&env.home);
+    for key in [
+        "SystemRoot",
+        "SystemDrive",
+        "TEMP",
+        "TMP",
+        "PATHEXT",
+        "ComSpec",
+    ] {
+        if let Some(v) = std::env::var_os(key) {
+            cmd.env(key, v);
+        }
+    }
+    cmd
+}
+
+/// An account command: the binary under the account's name, as `add` installs it.
+fn account_command(env: &Env, label: &str) -> PathBuf {
+    let path = env
+        .bin
+        .join(format!("{label}{}", std::env::consts::EXE_SUFFIX));
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_claude-proxy"), &path).unwrap();
+    #[cfg(windows)]
+    std::fs::copy(env!("CARGO_BIN_EXE_claude-proxy"), &path).unwrap();
+    path
 }
 
 fn cp(env: &Env, args: &[&str]) -> Output {
@@ -131,16 +205,7 @@ fn cp(env: &Env, args: &[&str]) -> Output {
 
 fn run_as(env: &Env, exe: &Path, args: &[&str], vars: &[(&str, &str)]) -> Output {
     let mut cmd = Command::new(exe);
-    cmd.args(args)
-        .env_clear()
-        .env("HOME", &env.home)
-        .env("XDG_CONFIG_HOME", env.home.join(".config"))
-        .env("PATH", &env.path)
-        .env("FAKE_LOG", &env.log)
-        .env("FAKE_ARGS_LOG", &env.args_log)
-        // Drainers exit at once unless a test asks for a warm one.
-        .env("CLAUDE_PROXY_IDLE_SECS", "0")
-        .current_dir(&env.home);
+    hermetic(&mut cmd, env).args(args);
     for (k, v) in vars {
         cmd.env(k, v);
     }
@@ -150,16 +215,9 @@ fn run_as(env: &Env, exe: &Path, args: &[&str], vars: &[(&str, &str)]) -> Output
 fn cp_stdin(env: &Env, args: &[&str], input: &str) -> Output {
     use std::io::Write;
     use std::process::Stdio;
-    let mut child = Command::new(env!("CARGO_BIN_EXE_claude-proxy"))
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_claude-proxy"));
+    let mut child = hermetic(&mut cmd, env)
         .args(args)
-        .env_clear()
-        .env("HOME", &env.home)
-        .env("XDG_CONFIG_HOME", env.home.join(".config"))
-        .env("PATH", &env.path)
-        .env("FAKE_LOG", &env.log)
-        .env("FAKE_ARGS_LOG", &env.args_log)
-        .env("CLAUDE_PROXY_IDLE_SECS", "0")
-        .current_dir(&env.home)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -617,32 +675,28 @@ fn profiles_get_the_users_mcp_servers() {
         r#"{"mcpServers":{"demo":{"command":"demo-server"}}}"#,
     )
     .unwrap();
-    let config_of = |id: &str| -> (Value, u32) {
+    let config_of = |id: &str| -> Value {
         let path = env
             .home
             .join(format!(".config/claude-proxy/runs/{id}/mcp.json"));
-        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
-        (
-            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap(),
-            mode & 0o777,
-        )
+        // Server entries can carry API keys.
+        assert_mode(&path, 0o600);
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap()
     };
 
     let id = stdout(&cp(&env, &["run", "--account", "acct-a", "hello"]));
     cp(&env, &["wait", &id, "--timeout", "30"]);
-    let (config, mode) = config_of(&id);
+    let config = config_of(&id);
     assert_eq!(config["mcpServers"]["demo"]["command"], "demo-server");
     assert_eq!(config["mcpServers"]["claude-proxy"]["args"][0], "__permit");
-    assert_eq!(mode, 0o600, "server entries can carry API keys");
 
     // The primary profile has them already.
     let id = stdout(&cp(&env, &["run", "--account", "claude", "hello"]));
     cp(&env, &["wait", &id, "--timeout", "30"]);
-    assert!(config_of(&id).0["mcpServers"].get("demo").is_none());
+    assert!(config_of(&id)["mcpServers"].get("demo").is_none());
 
     // An account's own command gets them too.
-    let proxy = env.bin.join("acct-a");
-    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_claude-proxy"), &proxy).unwrap();
+    let proxy = account_command(&env, "acct-a");
     assert!(run_as(&env, &proxy, &["mcp", "list"], &[]).status.success());
     let args = std::fs::read_to_string(&env.args_log).unwrap();
     let last = args.lines().last().unwrap();
@@ -897,6 +951,16 @@ fn hook(env: &Env, event: &str, input: &str) -> Output {
     cp_stdin(env, &["__hook", event], input)
 }
 
+/// What session-start says after the standing policy.
+fn session_start(env: &Env, input: &str) -> String {
+    let out = stdout(&hook(env, "session-start", input));
+    let (policy, rest) = out
+        .split_once("at the start of the call's description.")
+        .expect("the policy");
+    assert!(policy.starts_with("claude-proxy is installed."), "{out}");
+    rest.trim().to_string()
+}
+
 #[test]
 fn a_child_run_wakes_the_run_that_started_it() {
     let env = setup();
@@ -981,12 +1045,9 @@ fn events_print_each_change() {
         &env,
         &["run", "--account", "claude", "--name", "ev", "nap a bit"],
     ));
-    let mut events = Command::new(env!("CARGO_BIN_EXE_claude-proxy"))
+    let mut events = Command::new(env!("CARGO_BIN_EXE_claude-proxy"));
+    let mut events = hermetic(&mut events, &env)
         .args(["events", &id])
-        .env_clear()
-        .env("HOME", &env.home)
-        .env("XDG_CONFIG_HOME", env.home.join(".config"))
-        .env("PATH", &env.path)
         .stdout(std::process::Stdio::piped())
         .spawn()
         .unwrap();
@@ -1033,7 +1094,7 @@ fn hooks_tell_a_session_about_its_runs() {
         &mine,
     ));
     wait_until("it works", || status(&env, &going)["state"] == "working");
-    let resumed = stdout(&hook(&env, "session-start", &prompt));
+    let resumed = session_start(&env, &prompt);
     assert!(
         resumed.contains(&format!("- {going} is working")),
         "{resumed}"
@@ -1122,15 +1183,27 @@ fn old_runs_leave_the_list_then_go_away() {
     assert!(stderr(&cp(&env, &["watch", &elsewhere])).contains("with `claude-proxy rm`"));
 }
 
-fn mode(p: &Path) -> u32 {
-    std::fs::metadata(p).unwrap().permissions().mode() & 0o777
+/// Unix modes; on Windows the profile's ACLs guard the files, so only presence is checked.
+fn assert_mode(p: &Path, want: u32) {
+    let meta = std::fs::metadata(p).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(meta.permissions().mode() & 0o777, want, "{}", p.display());
+    }
+    #[cfg(windows)]
+    let _ = (meta, want);
 }
 
 #[test]
 fn run_state_is_private_to_the_user() {
     let env = setup();
     let root = env.home.join(".config/claude-proxy");
-    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
     let id = stdout(&cp(&env, &["run", "--account", "claude", "ask first"]));
     assert_eq!(
         cp(&env, &["wait", &id, "--timeout", "30"]).status.code(),
@@ -1138,19 +1211,19 @@ fn run_state_is_private_to_the_user() {
     );
     let run = root.join("runs").join(&id);
     for dir in [&root, &root.join("runs"), &run, &run.join("inbox")] {
-        assert_eq!(mode(dir), 0o700, "{}", dir.display());
+        assert_mode(dir, 0o700);
     }
-    assert_eq!(mode(&run.join("meta.json")), 0o600);
-    assert_eq!(mode(&run.join("asks")), 0o700);
+    assert_mode(&run.join("meta.json"), 0o600);
+    assert_mode(&run.join("asks"), 0o700);
     let ask = std::fs::read_dir(run.join("asks"))
         .unwrap()
         .flatten()
         .map(|e| e.path())
         .find(|p| p.extension().is_some_and(|x| x == "json"))
         .unwrap();
-    assert_eq!(mode(&ask), 0o600);
+    assert_mode(&ask, 0o600);
     for file in ["events.jsonl", "stderr.log", "mcp.json", "run.lock"] {
-        assert_eq!(mode(&run.join(file)), 0o600, "{file}");
+        assert_mode(&run.join(file), 0o600);
     }
 
     assert!(cp(&env, &["allow", &id, "--always", "--accept-edits"])
@@ -1161,7 +1234,7 @@ fn run_state_is_private_to_the_user() {
         Some(0)
     );
     for file in ["allowed", "mode"] {
-        assert_eq!(mode(&run.join(file)), 0o600, "{file}");
+        assert_mode(&run.join(file), 0o600);
     }
 
     let session = "33333333-3333-4333-8444-555555555555";
@@ -1170,8 +1243,8 @@ fn run_state_is_private_to_the_user() {
         "prompt",
         &format!(r#"{{"session_id":"{session}","permission_mode":"default"}}"#),
     );
-    assert_eq!(mode(&root.join("sessions")), 0o700);
-    assert_eq!(mode(&root.join("sessions").join(session)), 0o600);
+    assert_mode(&root.join("sessions"), 0o700);
+    assert_mode(&root.join("sessions").join(session), 0o600);
 }
 
 #[test]
@@ -1198,19 +1271,35 @@ fn always_refuses_a_wildcard_command() {
     );
 }
 
+/// A process of its own group that lives until it is stopped.
+fn bystander() -> std::process::Child {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        Command::new("sleep")
+            .arg("30")
+            .process_group(0)
+            .spawn()
+            .unwrap()
+    }
+    // A permit server waits on its stdin, held open here.
+    #[cfg(windows)]
+    Command::new(env!("CARGO_BIN_EXE_claude-proxy"))
+        .args(["__permit", "nope00"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .unwrap()
+}
+
 #[test]
 fn kill_never_signals_a_pid_a_dead_drainer_left() {
-    use std::os::unix::process::CommandExt;
     let env = setup();
     let id = stdout(&cp(&env, &["run", "--account", "claude", "hello"]));
     cp(&env, &["wait", &id, "--timeout", "30"]);
     settled(&env, &id);
 
-    let mut bystander = Command::new("sleep")
-        .arg("30")
-        .process_group(0)
-        .spawn()
-        .unwrap();
+    let mut bystander = bystander();
     let run = env.home.join(".config/claude-proxy/runs").join(&id);
     let path = run.join("meta.json");
     let mut meta: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
@@ -1249,7 +1338,7 @@ fn a_kill_that_times_out_leaves_the_run_stopping() {
     assert!(!out.status.success());
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("still marked to stop"), "{err}");
-    assert_eq!(mode(&run.join("stop")), 0o600);
+    assert_mode(&run.join("stop"), 0o600);
 
     let inside = [("CLAUDE_PROXY_RUN", parent.as_str())];
     let child = stdout(&run_as(
@@ -1332,7 +1421,6 @@ fn the_permit_server_lists_its_tool_and_denies_what_it_cannot_record() {
     let run = env.home.join(".config/claude-proxy/runs/abc123");
     std::fs::create_dir_all(&run).unwrap();
     std::fs::write(run.join("asks"), "").unwrap();
-    std::fs::set_permissions(run.join("asks"), std::fs::Permissions::from_mode(0o600)).unwrap();
     let init = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#;
     let call = r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"permit","arguments":{"tool_name":"Bash","input":{"command":"rm -rf build"},"tool_use_id":"t1"}}}"#;
     let replies = |lines: &[&str]| -> Vec<Value> {
@@ -1541,6 +1629,7 @@ fn naming_an_account_left_out_of_auto_still_runs_on_it() {
     assert_eq!(status(&env, &id)["account"], "acct-a");
 }
 
+#[cfg(unix)]
 #[test]
 fn a_run_has_a_session_of_its_own_and_outlives_whatever_started_it() {
     use std::os::unix::process::CommandExt;
@@ -1652,7 +1741,7 @@ fn a_reopened_session_hears_what_finished_while_it_was_closed() {
     let exe = Path::new(env!("CARGO_BIN_EXE_claude-proxy"));
     let session = "88888888-8888-4888-8888-888888888888";
     let started = format!(r#"{{"session_id":"{session}","source":"startup"}}"#);
-    assert!(stdout(&hook(&env, "session-start", &started)).is_empty());
+    assert!(session_start(&env, &started).is_empty());
     let id = stdout(&run_as(
         &env,
         exe,
@@ -1662,10 +1751,10 @@ fn a_reopened_session_hears_what_finished_while_it_was_closed() {
     cp(&env, &["wait", &id, "--timeout", "30"]);
     settled(&env, &id);
     let input = format!(r#"{{"session_id":"{session}","source":"resume"}}"#);
-    let first = stdout(&hook(&env, "session-start", &input));
+    let first = session_start(&env, &input);
     assert!(first.contains("finished since it was last told"), "{first}");
     assert!(first.contains(&format!("{id} (away) is idle")), "{first}");
-    assert!(stdout(&hook(&env, "session-start", &input)).is_empty());
+    assert!(session_start(&env, &input).is_empty());
 }
 
 #[test]
@@ -1731,4 +1820,73 @@ fn peeked_news_stays_untold_until_it_is_acknowledged() {
     let acked = run_as(&env, exe, &["news", "--ack", &mark], &mine);
     assert_eq!(acked.status.code(), Some(0));
     assert!(peek().is_empty());
+}
+
+/// Claude Desktop and some terminals end their children with a Job Object;
+/// a run breaks away from it.
+#[cfg(windows)]
+#[test]
+fn a_run_outlives_the_job_object_that_started_it() {
+    use std::io::Write;
+    use std::os::windows::io::AsRawHandle;
+    use std::os::windows::process::CommandExt;
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_BREAKAWAY_OK, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    let env = setup();
+    let id_file = env.home.join("id");
+    // SAFETY: a job this test owns and closes.
+    let job = unsafe {
+        let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+        assert!(!job.is_null());
+        let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+        limits.BasicLimitInformation.LimitFlags =
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK;
+        SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            &limits as *const _ as *const std::ffi::c_void,
+            std::mem::size_of_val(&limits) as u32,
+        );
+        job
+    };
+    // Waits for a line, so it is in the job before it starts claude-proxy.
+    let mut starter = Command::new("cmd");
+    let mut starter = hermetic(&mut starter, &env)
+        .raw_arg(format!(
+            "/d /c \"set /p go= & \"{}\" run --account claude \"nap then answer\" > \"{}\" & ping -n 30 127.0.0.1 >nul\"",
+            env!("CARGO_BIN_EXE_claude-proxy"),
+            id_file.display()
+        ))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    // SAFETY: both handles are live.
+    assert_ne!(
+        unsafe { AssignProcessToJobObject(job, starter.as_raw_handle() as HANDLE) },
+        0
+    );
+    starter.stdin.take().unwrap().write_all(b"\r\n").unwrap();
+    wait_until("the run started", || {
+        std::fs::read_to_string(&id_file).is_ok_and(|s| !s.trim().is_empty())
+    });
+    let id = std::fs::read_to_string(&id_file)
+        .unwrap()
+        .trim()
+        .to_string();
+    // SAFETY: closing the job ends everything still in it.
+    unsafe { CloseHandle(job) };
+    let _ = starter.wait();
+    let out = cp(&env, &["wait", &id, "--timeout", "30"]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        stdout(&cp(&env, &["read", &id]))
+    );
+    assert_eq!(stdout(&out), "echo: nap then answer");
 }
