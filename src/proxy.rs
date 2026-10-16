@@ -77,7 +77,7 @@ pub fn claude_command(config_dir: Option<&Path>) -> std::process::Command {
         crate::shared::link_shared(dir);
     }
     let dir = config_dir.map(|d| d.to_string_lossy().into_owned());
-    let mut command = std::process::Command::new("claude");
+    let mut command = std::process::Command::new(crate::paths::program("claude"));
     for op in proxy_env(dir.as_deref()) {
         match op {
             EnvOp::Set(k, v) => {
@@ -99,8 +99,9 @@ fn exec_or_status(mut command: std::process::Command, _label: &str) -> Result<i3
     Err(classify_spawn_error(err))
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
 fn exec_or_status(mut command: std::process::Command, _label: &str) -> Result<i32, String> {
+    crate::win::leave_ctrl_c_to_child();
     match command.status() {
         Ok(status) => Ok(status.code().unwrap_or(1)),
         Err(err) => Err(classify_spawn_error(err)),

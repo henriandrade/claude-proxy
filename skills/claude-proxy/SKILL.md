@@ -69,7 +69,8 @@ claude-proxy wait a1b2c3       # as a background command
 `claude-proxy` command on its own with the id written out — not inside `$(…)`,
 a shell variable, or a chain with other commands — so it matches the user's
 permission rule for `claude-proxy` instead of prompting or being refused. Pass a
-long task on stdin: `claude-proxy run - <<'CLAUDE_PROXY_TASK' … CLAUDE_PROXY_TASK`. Flags:
+long task on stdin: `claude-proxy run - <<'CLAUDE_PROXY_TASK' … CLAUDE_PROXY_TASK`
+(in PowerShell, where there is no heredoc: `@' … '@ | claude-proxy run -`). Flags:
 
 | Flag | Use |
 |---|---|

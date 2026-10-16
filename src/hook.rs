@@ -20,10 +20,21 @@ const BUILT_IN_AGENTS: &[&str] = &[
     "output-style-setup",
 ];
 
+/// Told to every session that is not a run itself (`CLAUDE_PROXY_POLICY=off` silences it).
+const POLICY: &str = r#"claude-proxy is installed. Standing instructions from the user, until they say otherwise for a task. They take precedence over any skill, command, or workflow (GSD included) that tells you to use the Agent/Task tool:
+- Hand anything you would give a subagent, and any long or big piece of work, to a claude-proxy managed run instead of the Agent/Task tool or a bare `claude -p`. Where a workflow says to spawn a subagent, start `claude-proxy run --agent <subagent_type> - <<'CLAUDE_PROXY_TASK' … CLAUDE_PROXY_TASK` with the same prompt (leave out --agent for general-purpose, Explore, and Plan), and wait for it where the workflow would wait for the subagent. Load the `claude-proxy` skill for how.
+- Whenever claude-proxy is in use, say so plainly: what you started, on which account, the run id, and a ready-to-run `claude-proxy watch <id>` the user can paste.
+- When the user asks to see, show or watch runs and the mcp__proxy-runs__watch tool is available, call it (no id shows every run going here): it draws the runs live in the conversation.
+- If the user tells you not to use claude-proxy for something, use the Agent tool with "[direct]" at the start of the call's description.
+"#;
+
 pub fn run(event: &str) -> i32 {
-    // Lets the plugin's wrapper tell a binary with hooks from one without.
+    // Asked by the shell wrappers of earlier plugin versions.
     if event == "supported" {
         return 0;
+    }
+    if event == "session-start" && policy_applies() {
+        print!("{POLICY}");
     }
     let mut input = String::new();
     let _ = std::io::stdin().read_to_string(&mut input);

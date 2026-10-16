@@ -69,7 +69,7 @@ fn link_shared_from(global: &Path, profile: &Path) {
                     let _ = symlink(&src, &dst);
                 }
             }
-            Ok(m) if m.is_file() && src.is_file() => {
+            Ok(m) if m.is_file() && src.is_file() && !linked(&src, &dst) => {
                 let merged = MERGE.contains(name) && append_into(&dst, &src).is_ok();
                 let cleared = (merged && std::fs::remove_file(&dst).is_ok())
                     || std::fs::rename(&dst, backup_path(&dst)).is_ok();
@@ -129,15 +129,37 @@ fn symlink(src: &Path, dst: &Path) -> std::io::Result<()> {
     std::os::unix::fs::symlink(src, dst)
 }
 
-// Windows symlinks need extra privileges; profiles there stay unshared.
-#[cfg(not(unix))]
-fn symlink(_src: &Path, _dst: &Path) -> std::io::Result<()> {
-    Ok(())
+/// Windows symlinks need privileges: a junction for a dir, a hardlink for a file.
+/// A file on another volume than the profile stays unshared.
+#[cfg(windows)]
+fn symlink(src: &Path, dst: &Path) -> std::io::Result<()> {
+    if src.is_dir() {
+        junction::create(src, dst)
+    } else {
+        std::fs::hard_link(src, dst)
+    }
 }
 
-#[cfg(all(test, unix))]
+/// A hardlinked file is a plain file; a symlink never reaches this check.
+fn linked(src: &Path, dst: &Path) -> bool {
+    #[cfg(windows)]
+    return crate::win::same_file(src, dst);
+    #[cfg(not(windows))]
+    {
+        let _ = (src, dst);
+        false
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    fn is_link(p: &Path) -> bool {
+        let m = std::fs::symlink_metadata(p).unwrap();
+        // A junction is a symlink to std; a hardlinked file is a plain file.
+        m.file_type().is_symlink() || (cfg!(windows) && m.is_file())
+    }
 
     #[test]
     fn links_missing_entries_and_skips_absent_ones() {
@@ -150,14 +172,23 @@ mod tests {
         link_shared_from(&global, &profile);
 
         for name in ["skills", "settings.json"] {
-            let m = std::fs::symlink_metadata(profile.join(name)).unwrap();
-            assert!(m.file_type().is_symlink(), "{name} should be linked");
+            assert!(is_link(&profile.join(name)), "{name} should be linked");
         }
         assert!(
             !profile.join("agents").exists(),
             "absent globally → not linked"
         );
         link_shared_from(&global, &profile);
+        assert!(
+            !profile.join("settings.json.pre-shared").exists(),
+            "a second pass leaves a linked entry alone"
+        );
+        std::fs::write(global.join("settings.json"), "{\"v\":2}").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(profile.join("settings.json")).unwrap(),
+            "{\"v\":2}",
+            "the profile sees the shared file, not a copy"
+        );
     }
 
     #[test]
@@ -176,8 +207,7 @@ mod tests {
             "new"
         );
         assert!(global.join("projects/slug/old.jsonl").exists());
-        let m = std::fs::symlink_metadata(profile.join("projects")).unwrap();
-        assert!(m.file_type().is_symlink());
+        assert!(is_link(&profile.join("projects")));
     }
 
     #[test]
@@ -190,10 +220,7 @@ mod tests {
 
         link_shared_from(&global, &profile);
 
-        assert!(std::fs::symlink_metadata(profile.join("plugins"))
-            .unwrap()
-            .file_type()
-            .is_symlink());
+        assert!(is_link(&profile.join("plugins")));
         assert_eq!(
             std::fs::read_to_string(profile.join("plugins.pre-shared/local.json")).unwrap(),
             "x"
@@ -226,9 +253,6 @@ mod tests {
             "a\nb\n"
         );
         assert!(!profile.join("history.jsonl.pre-shared").exists());
-        assert!(std::fs::symlink_metadata(profile.join("history.jsonl"))
-            .unwrap()
-            .file_type()
-            .is_symlink());
+        assert!(is_link(&profile.join("history.jsonl")));
     }
 }

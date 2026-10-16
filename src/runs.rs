@@ -289,8 +289,17 @@ pub(crate) fn inbox_names(dir: &Path) -> Vec<String> {
         .collect()
 }
 
+/// Opened for writing: Windows' LockFileEx wants read or write access, which
+/// an append-only handle lacks.
 pub(crate) fn lock_file(dir: &Path) -> std::io::Result<File> {
-    crate::paths::append(&dir.join("run.lock"))
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(dir.join("run.lock"))
 }
 
 /// A drainer holds the lock exclusively. Probed with a shared lock, so two
@@ -370,6 +379,23 @@ fn spawn_drainer(id: &str) -> Result<(), String> {
                 Ok(())
             });
         }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        use windows_sys::Win32::System::Threading::{
+            CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS,
+        };
+        // No console and out of the starter's job, so closing the terminal or
+        // the app that started it does not take the run down. A job that
+        // forbids breaking away refuses the spawn; then the run stays in it.
+        crate::win::keep_std_handles_private();
+        let detached = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP;
+        cmd.creation_flags(detached | CREATE_BREAKAWAY_FROM_JOB);
+        if cmd.spawn().is_ok() {
+            return Ok(());
+        }
+        cmd.creation_flags(detached);
     }
     cmd.spawn()
         .map(|_| ())
@@ -560,6 +586,12 @@ pub(crate) fn turn_command(dir: &Path, meta: &Meta) -> Result<Command, String> {
         // Its own group, so `kill` stops it and every tool process it started.
         cmd.process_group(0);
     }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // The drainer has no console; without this Claude would open a window.
+        cmd.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
+    }
     Ok(cmd)
 }
 
@@ -658,10 +690,16 @@ pub fn kill(id: &str) -> Result<bool, String> {
         }
         // A pid in meta is this run's only while its drainer holds the lock,
         // and it can land just after we look.
+        #[cfg(unix)]
         if alive(&dir) {
             if let Some(pid) = load(id).ok().and_then(|m| m.turn_pid) {
                 signal_group(pid, started.elapsed() > Duration::from_secs(3));
             }
+        }
+        // The drainer ends the tree when it sees `stop`; this is for one that cannot.
+        #[cfg(windows)]
+        if started.elapsed() > Duration::from_secs(3) {
+            crate::win::terminate_run(id);
         }
         std::thread::sleep(Duration::from_millis(200));
     }
@@ -683,15 +721,6 @@ pub(crate) fn signal_group(pid: u32, force: bool) {
     unsafe {
         libc::killpg(pgid, signal);
     }
-}
-
-#[cfg(not(unix))]
-pub(crate) fn signal_group(pid: u32, _force: bool) {
-    let _ = Command::new("taskkill")
-        .args(["/T", "/F", "/PID", &pid.to_string()])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
 }
 
 fn is_idle(meta: &Meta) -> bool {
@@ -865,6 +894,8 @@ pub fn attach(id: &str) -> Result<i32, String> {
     );
     meta.activity = Some("open interactively (claude-proxy attach)".into());
     save(&dir, &mut meta)?;
+    #[cfg(windows)]
+    crate::win::leave_ctrl_c_to_child();
     let status = cmd.status();
     let mut meta = load(id)?;
     meta.activity = None;
@@ -1013,6 +1044,10 @@ fn make_worktree(cwd: &Path, id: &str) -> Result<(Worktree, PathBuf), String> {
             cwd.display()
         )
     })?;
+    // git prints `C:/...` on Windows; the run's cwd is canonical.
+    let repo = crate::paths::canonical(Path::new(&repo))
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or(repo);
     let path = config_dir().join("worktrees").join(id);
     let branch = format!("claude-proxy/{id}");
     git(

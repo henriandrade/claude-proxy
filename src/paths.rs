@@ -3,11 +3,14 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+/// The mod's `configDir` (mods/proxy-runs/hooks/register.tsx) must agree.
 pub fn config_dir() -> PathBuf {
-    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-        if !xdg.is_empty() {
-            return Path::new(&xdg).join("claude-proxy");
-        }
+    if let Some(xdg) = env_dir("XDG_CONFIG_HOME") {
+        return xdg.join("claude-proxy");
+    }
+    #[cfg(windows)]
+    if let Some(appdata) = env_dir("APPDATA") {
+        return appdata.join("claude-proxy");
     }
     home().join(".config").join("claude-proxy")
 }
@@ -16,18 +19,57 @@ pub fn account_config_dir(label: &str) -> PathBuf {
     config_dir().join("accounts").join(label)
 }
 
+/// Claude Code's own home: `USERPROFILE` on Windows, where Git Bash also sets `HOME`.
 pub fn home() -> PathBuf {
-    if let Ok(h) = std::env::var("HOME") {
-        if !h.is_empty() {
-            return PathBuf::from(h);
+    let order = if cfg!(windows) {
+        ["USERPROFILE", "HOME"]
+    } else {
+        ["HOME", "USERPROFILE"]
+    };
+    order
+        .into_iter()
+        .find_map(env_dir)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn env_dir(key: &str) -> Option<PathBuf> {
+    std::env::var_os(key)
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+}
+
+/// `canonicalize` without Windows' `\\?\` prefix, which git and Claude do not take.
+pub fn canonical(path: &Path) -> std::io::Result<PathBuf> {
+    let path = path.canonicalize()?;
+    #[cfg(windows)]
+    {
+        let text = path.to_string_lossy();
+        if let Some(unc) = text.strip_prefix(r"\\?\UNC\") {
+            return Ok(PathBuf::from(format!(r"\\{unc}")));
+        }
+        if let Some(local) = text.strip_prefix(r"\\?\") {
+            return Ok(PathBuf::from(local));
         }
     }
-    if let Ok(up) = std::env::var("USERPROFILE") {
-        if !up.is_empty() {
-            return PathBuf::from(up);
+    Ok(path)
+}
+
+/// The program to start for `name` (e.g. `claude`). On Windows that may be npm's
+/// `claude.cmd`, which `Command::new` would not find: it only adds `.exe`.
+pub fn program(name: &str) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let exts = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
+        for dir in std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()) {
+            for ext in exts.split(';').filter(|e| !e.is_empty()) {
+                let candidate = dir.join(format!("{name}{}", ext.to_ascii_lowercase()));
+                if candidate.is_file() {
+                    return candidate;
+                }
+            }
         }
     }
-    PathBuf::from(".")
+    PathBuf::from(name)
 }
 
 /// A run or Claude session id that is safe as one file name under the config dir.
@@ -55,11 +97,33 @@ pub fn write_atomic(path: &Path, bytes: &[u8], mode: u32) -> std::io::Result<()>
     #[cfg(not(unix))]
     let _ = mode;
     let mut f = options.open(&tmp)?;
-    let result = f.write_all(bytes).and_then(|()| fs::rename(&tmp, path));
+    let result = f.write_all(bytes).and_then(|()| {
+        drop(f);
+        rename(&tmp, path)
+    });
     if result.is_err() {
         let _ = fs::remove_file(&tmp);
     }
     result
+}
+
+/// On Windows a rename onto a file another rename or reader holds open fails
+/// for a moment with access denied.
+fn rename(from: &Path, to: &Path) -> std::io::Result<()> {
+    let mut tries = 0;
+    loop {
+        match fs::rename(from, to) {
+            Err(e)
+                if cfg!(windows)
+                    && e.kind() == std::io::ErrorKind::PermissionDenied
+                    && tries < 50 =>
+            {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            result => return result,
+        }
+    }
 }
 
 pub fn append(path: &Path) -> std::io::Result<File> {
@@ -164,6 +228,14 @@ mod tests {
     }
 
     #[test]
+    fn program_falls_back_to_the_bare_name() {
+        assert_eq!(
+            program("claude-proxy-no-such-program"),
+            PathBuf::from("claude-proxy-no-such-program")
+        );
+    }
+
+    #[test]
     fn ids_cannot_escape_their_dir() {
         for good in ["a1b2c3", "7ecce39f-0ebf-43d2-bdff-c0fa9272d4b0"] {
             assert!(valid_id(good), "{good:?}");
@@ -179,7 +251,7 @@ mod tests {
         let a = account_config_dir("personal");
         let b = account_config_dir("work");
         assert!(a.starts_with(config_dir()));
-        assert!(a.ends_with("accounts/personal"));
+        assert!(a.ends_with(Path::new("accounts").join("personal")));
         assert_ne!(a, b);
     }
 }

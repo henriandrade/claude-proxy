@@ -119,9 +119,12 @@ async function cli(
   }
 }
 
+// paths::config_dir in src/paths.rs must agree.
 async function configDir($: Engine): Promise<string> {
   const xdg = await $.env.get('XDG_CONFIG_HOME')
-  return `${xdg || `${await $.env.get('HOME')}/.config`}/claude-proxy`
+  if (xdg) return `${xdg}/claude-proxy`
+  const appData = (await $.env.get('OS')) === 'Windows_NT' ? await $.env.get('APPDATA') : undefined
+  return appData ? `${appData}/claude-proxy` : `${await $.env.get('HOME')}/.config/claude-proxy`
 }
 
 const runsDir = async ($: Engine) => `${await configDir($)}/runs`
@@ -138,13 +141,11 @@ async function markSession($: Engine): Promise<void> {
   marked = id
 }
 
-// $.fs cannot delete, so the marker is removed with rm, or turned off where no process runs.
+// $.fs cannot delete, and a process may not run here: the marker is turned off.
 async function unmarkSession($: Engine, id: string): Promise<void> {
   if (!validSession(id)) return
   const path = `${await configDir($)}/sessions/${id}.mod`
-  if (!(await $.fs.exists(path))) return
-  const removed = await cli($, ['-f', path], undefined, 'rm')
-  if (removed?.exitCode !== 0) await $.fs.write(path, 'off')
+  if (await $.fs.exists(path)) await $.fs.write(path, 'off')
   if (id === marked) marked = ''
 }
 

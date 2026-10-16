@@ -48,8 +48,8 @@ controls like subagents, spread across your accounts.
 
 ## Install
 
-Requires macOS or Linux (see [Platform support](#platform-support)) and Claude
-Code on your `PATH`.
+Runs on macOS, Linux and Windows (see [Platform support](#platform-support)),
+with Claude Code on your `PATH`.
 
 ### 1. The claude-proxy command
 
@@ -62,14 +62,24 @@ project, so install from Git.
 
 The manager lands in `~/.cargo/bin`. The per-account commands it creates go in
 `~/.local/bin`, so put that on your `PATH` too (`add` reminds you if it is
-missing):
+missing). On macOS and Linux:
 
 ```sh
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-To upgrade, run the same command with `--force`. The per-account commands
-follow, because they are symlinks to the manager. From a clone, use
+On Windows the same folder is `%USERPROFILE%\.local\bin`, where Claude Code's own
+installer puts `claude.exe`, so it is usually on `PATH` already. If not, in
+PowerShell:
+
+```powershell
+[Environment]::SetEnvironmentVariable('Path', "$HOME\.local\bin;" + [Environment]::GetEnvironmentVariable('Path', 'User'), 'User')
+```
+
+To upgrade, run the same command with `--force`. On macOS and Linux the
+per-account commands follow, because they are symlinks to the manager. On
+Windows they are hardlinks; the next `claude-proxy list` renews them (one that
+is running at the time is renewed by a later `list`). From a clone, use
 `cargo install --path .`.
 
 ### 2. The quota-router plugin (for agents)
@@ -159,13 +169,15 @@ where the profile is so you can delete it yourself.
 
 One binary, two roles. claude-proxy looks at `argv[0]`: under its own name it is
 the manager, under a name it installed it is the proxy. Each command is a
-symlink to the manager.
+symlink to the manager (on Windows, `<name>.exe`, a hardlink).
 
 Each account is its own `CLAUDE_CONFIG_DIR` under
-`~/.config/claude-proxy/accounts/<name>` (or `$XDG_CONFIG_HOME/claude-proxy`),
+`~/.config/claude-proxy/accounts/<name>` (`$XDG_CONFIG_HOME/claude-proxy` when
+that is set, `%APPDATA%\claude-proxy` on Windows),
 and Claude's own login stores its credentials. An allowlist of `~/.claude`
 entries (`settings.json`, `CLAUDE.md`, `skills`, `agents`, `commands`,
-`plugins`, `hooks`, `projects` and similar) is linked into each profile. A copy
+`plugins`, `hooks`, `projects` and similar) is linked into each profile
+(on Windows, directories as junctions and files as hardlinks). A copy
 a profile made before an entry was shared is merged in or moved aside as
 `<name>.pre-shared`, never deleted. User and local MCP servers live next to the
 login in `~/.claude.json`, so each launch passes them with `--mcp-config` from
@@ -324,12 +336,37 @@ a run finishes or asks, without polling. See its
 
 ## Platform support
 
-macOS and Linux are supported, and CI runs the test suite on both. Credentials
-live in the login Keychain through `/usr/bin/security` on macOS and in
-`<profile>/.credentials.json` on Linux.
+macOS, Linux and native Windows are supported with the same features, and CI
+runs the whole test suite (unit, end-to-end against a fake Claude, hooks, and
+the mod's tests and type check) on all three.
 
-Windows is not supported: runs, `kill` and the plugin's hooks rely on Unix
-process groups and signals and on `sh`. WSL may work but is untested.
+| | macOS | Linux | Windows |
+|---|---|---|---|
+| Config dir | `~/.config/claude-proxy` | `~/.config/claude-proxy` | `%APPDATA%\claude-proxy` |
+| Credentials | login Keychain (`/usr/bin/security`) | `<profile>/.credentials.json` | `<profile>\.credentials.json` |
+| Account commands | symlinks | symlinks | `<name>.exe` hardlinks |
+| Shared `~/.claude` entries | symlinks | symlinks | junctions and hardlinks |
+| A run outlives its starter | own session (`setsid`) | own session (`setsid`) | detached, out of the starter's job |
+| `kill` stops | the run's process group | the run's process group | the run's Job Object |
+
+`XDG_CONFIG_HOME`, when set, moves the config dir on every platform. On
+Windows, Claude Code's home is `%USERPROFILE%`, and so is claude-proxy's.
+
+Windows notes:
+
+- Claude Code installed with npm is a `claude.cmd`; claude-proxy finds it, but
+  the native installer's `claude.exe` is the better fit, since a `.cmd` cannot
+  take every argument (a line break in one, for example).
+- A run breaks away from the Job Object of whatever started it, so closing the
+  terminal or the app does not stop it. A job that forbids breaking away keeps
+  the run in it, and closing that app then ends the run.
+- `kill` ends a run's Claude and its tools at once; there is no gentle stop
+  first, as there is with `SIGTERM` on Unix.
+- A shared file (`settings.json`, `CLAUDE.md`, ...) is linked only when the
+  profile and `~/.claude` are on the same volume; directories link across
+  volumes.
+- Run state is protected by your user profile's permissions rather than by
+  Unix modes.
 
 ## Known limits
 
@@ -353,7 +390,8 @@ process groups and signals and on `sh`. WSL may work but is untested.
   printed. They stay off command lines, with one rare macOS exception described
   in SECURITY.md.
 - Run state lives in owner-only directories (0700) and files (0600) under
-  `~/.config/claude-proxy`.
+  `~/.config/claude-proxy` (on Windows, under `%APPDATA%`, guarded by your
+  profile's ACLs).
 - A run's asks are answered only through `allow`, `deny` and `answer`, by
   whoever can write to that directory.
 

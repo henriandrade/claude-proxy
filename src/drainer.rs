@@ -13,10 +13,12 @@ use serde_json::{json, Value};
 
 use crate::asks;
 use crate::quota::{self, now_secs};
+#[cfg(unix)]
+use crate::runs::signal_group;
 use crate::runs::{
     classify, enqueue_first, excerpt, first_account, inbox_names, load, lock_file, marker,
     next_account, notify_parent, observe, parse_pool, queued, request_drainer, run_dir,
-    session_len, signal_group, take_inbox, turn_command, Meta, Reason, Signals, State,
+    session_len, take_inbox, turn_command, Meta, Reason, Signals, State,
 };
 
 const POLL: Duration = Duration::from_millis(300);
@@ -96,6 +98,8 @@ struct Proc {
     child: Child,
     stdin: ChildStdin,
     lines: Receiver<String>,
+    #[cfg(windows)]
+    job: Option<crate::win::Job>,
 }
 
 impl Proc {
@@ -107,6 +111,8 @@ impl Proc {
                 format!("could not start claude: {e}")
             }
         })?;
+        #[cfg(windows)]
+        let job = crate::win::Job::for_run(&meta.id, &child);
         let stdin = child.stdin.take().ok_or("claude has no stdin")?;
         let stdout = child.stdout.take().ok_or("claude has no stdout")?;
         let (tx, lines) = mpsc::channel();
@@ -121,6 +127,8 @@ impl Proc {
             child,
             stdin,
             lines,
+            #[cfg(windows)]
+            job,
         })
     }
 
@@ -132,11 +140,27 @@ impl Proc {
 
     fn end(self, force: bool) -> Option<i32> {
         let Proc {
-            mut child, stdin, ..
+            mut child,
+            stdin,
+            #[cfg(windows)]
+            job,
+            ..
         } = self;
         drop(stdin);
+        let stop = |child: &mut Child, force: bool| {
+            #[cfg(unix)]
+            signal_group(child.id(), force);
+            // No gentle stop on Windows: the whole tree goes, as SIGKILL would.
+            #[cfg(windows)]
+            match &job {
+                Some(job) => job.terminate(),
+                None => {
+                    let _ = (child.kill(), force);
+                }
+            }
+        };
         if force {
-            signal_group(child.id(), false);
+            stop(&mut child, false);
         }
         let started = Instant::now();
         loop {
@@ -144,7 +168,7 @@ impl Proc {
                 return status.code();
             }
             if started.elapsed() > Duration::from_secs(5) {
-                signal_group(child.id(), true);
+                stop(&mut child, true);
                 return child.wait().ok().and_then(|s| s.code());
             }
             std::thread::sleep(Duration::from_millis(100));

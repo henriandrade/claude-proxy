@@ -36,9 +36,8 @@ pub fn run(opts: RunOpts) -> Result<i32, String> {
         Some(dir) => dir,
         None => std::env::current_dir().map_err(|e| format!("no current directory: {e}"))?,
     };
-    let cwd = cwd
-        .canonicalize()
-        .map_err(|e| format!("bad --cwd {}: {e}", cwd.display()))?;
+    let cwd =
+        crate::paths::canonical(&cwd).map_err(|e| format!("bad --cwd {}: {e}", cwd.display()))?;
     let mut claude_args = opts.claude_args;
     if let Some(agent) = opts.agent {
         claude_args.extend(["--agent".to_string(), agent]);
@@ -213,7 +212,7 @@ pub fn runs(as_json: bool, everything: bool) -> Result<i32, String> {
 
 /// For a worktree, its main checkout; outside git, the directory itself.
 fn project_root() -> Option<PathBuf> {
-    let cwd = std::env::current_dir().ok()?.canonicalize().ok()?;
+    let cwd = crate::paths::canonical(&std::env::current_dir().ok()?).ok()?;
     let common = std::process::Command::new("git")
         .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
         .current_dir(&cwd)
@@ -226,7 +225,7 @@ fn project_root() -> Option<PathBuf> {
         Some(git_dir) if git_dir.ends_with(".git") => git_dir
             .parent()
             .map(Path::to_path_buf)
-            .and_then(|p| p.canonicalize().ok()),
+            .and_then(|p| crate::paths::canonical(&p).ok()),
         _ => Some(cwd),
     }
 }
