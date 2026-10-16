@@ -198,8 +198,11 @@ mod tests {
     #[test]
     fn closing_the_job_ends_the_tree() {
         let mut child = waiting();
+        let started = std::time::Instant::now();
         drop(Job::for_run("test02", &child).expect("a job"));
-        assert!(!child.wait().unwrap().success());
+        // Ended by the job's close, which leaves exit code 0.
+        child.wait().unwrap();
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
     }
 
     #[test]
