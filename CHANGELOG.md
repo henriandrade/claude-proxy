@@ -20,8 +20,10 @@ has its own version and first shipped in 0.8.0.
   It draws in Claude Code's own look, in color, and opens with a pointer to
   `/runs <id>`. A watch also prints the run's asks as they come.
 - proxy-runs: a run the tool starts asks Claude to background
-  `claude-proxy watch --task <id>`, and the mod waits briefly before telling a
-  finished run, so a watched run is reported once.
+  `claude-proxy watch --task <id>`, described `<name> · /runs <id>`, and the mod
+  waits briefly before telling a finished run, so a watched run is reported
+  once. A run's row has `/runs <id>` and `/runs` buttons that open the Runs
+  pane without a prompt.
 
 ## [0.10.0] - 2026-10-16
 

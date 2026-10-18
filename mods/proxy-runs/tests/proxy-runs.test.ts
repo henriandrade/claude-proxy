@@ -38,6 +38,7 @@ type World = {
   logs: string[]
   noProcess: boolean
   files: Record<string, string>
+  opened: string[]
 }
 
 const META = {
@@ -91,6 +92,7 @@ function world(on: On, events: string[] = [], env: Record<string, string> = {}):
     logs: [],
     noProcess: false,
     files: {},
+    opened: [],
   }
   on('fs.list', () => ({ value: [{ name: 'abc123', kind: 'dir', size: 0, mtimeMs: 0, isLink: false }] }) as never)
   on('fs.read', ($, e) => ({ value: String(e.path).endsWith('meta.json') ? JSON.stringify(META) : EVENTS_JSONL }) as never)
@@ -110,7 +112,7 @@ function world(on: On, events: string[] = [], env: Record<string, string> = {}):
   })
   on('ui.toast', ($, e) => (w.toasts.push(e.text), { value: undefined }))
   on('ui.log', ($, e) => (w.logs.push(e.text), { value: undefined }))
-  on('ui.open', () => ({ value: { isPlaced: true } }) as never)
+  on('ui.open', ($, e) => (w.opened.push(e.id), { value: { isPlaced: true } }) as never)
   on('process.run', ($, e) => {
     if (w.noProcess) return { deny: 'CLI only' }
     w.argvs.push([...e.argv])
@@ -232,6 +234,21 @@ test('talking to a run that asks a question answers it', async ($, on) => {
   w.argvs = []
   expect((await $.prompt.submit(typed('Blue | Small'))).drop).toBe('Answered → run abc123')
   expect(w.argvs.find(a => a[1] === 'answer')).toEqual(['claude-proxy', 'answer', 'abc123', 'Blue', 'Small'])
+  await row.unmount()
+})
+
+test('the row opens the Runs pane on its run, or on every run, without a prompt', async ($, on) => {
+  const w = world(on)
+  const submitted: string[] = []
+  on('prompt.submit', ($, e) => (submitted.push(e.text), { text: e.text }) as never)
+  await start($)
+  await $.tool.call({ tool: TOOL, tool_use_id: 'tu1', prompt: 'p', description: 'say ok' })
+  const row = await $.ui.mount({ plugin: 'proxy-runs', surface: 'desktop', component: 'ToolUse', requestId: 'tu1', props: toolUse('tu1') })
+  await row.press({ key: 'open:abc123' })
+  expect(w.opened).toEqual(['runs'])
+  await row.press({ key: 'all:abc123' })
+  expect(w.opened).toEqual(['runs', 'runs'])
+  expect(submitted).toEqual([])
   await row.unmount()
 })
 

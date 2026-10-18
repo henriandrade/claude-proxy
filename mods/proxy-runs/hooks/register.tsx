@@ -504,6 +504,14 @@ function nativeRow($: Engine, e: RenderInput<'ToolUse'>, next: (e: RenderInput<'
 
 type CardOpts = { inPane?: boolean; room?: number }
 
+async function openPane($: Engine, id?: string): Promise<void> {
+  if (id && validId(id)) {
+    await refresh($, id)
+    await update($, selected, () => id)
+  }
+  await $.ui.open({ id: PANE, title: 'Runs' })
+}
+
 async function card($: Engine, els: ElementTable, id: string, row: Row, opts: CardOpts = {}): Promise<RenderElement> {
   const { Box, Text, Button } = els
   const run = (await read($, runs)).find(r => r.id === id)
@@ -537,6 +545,8 @@ async function card($: Engine, els: ElementTable, id: string, row: Row, opts: Ca
           <Text bold>{run.name ?? `Run ${run.id}`}</Text>
           <Text dimColor>{meta}</Text>
           <Button key={`reply:${id}`} plain dimColor label="Reply" onPress={() => talkTo($, id)} />
+          <Button key={`open:${id}`} plain dimColor label={`/runs ${id}`} onPress={() => openPane($, id)} />
+          <Button key={`all:${id}`} plain dimColor label="/runs" onPress={() => openPane($)} />
         </Box>
       )}
       {issue && <Text color="yellow">{issue}</Text>}
@@ -618,7 +628,7 @@ export const register: Register = on => {
     return {
       result:
         `Started claude-proxy run ${run.id} on ${run.account}. Now start \`claude-proxy watch --task ${run.id}\` ` +
-        `through Bash with run_in_background true and the description "${str(input.description).replace(/"/g, "'")} · claude-proxy ${run.id}": ` +
+        `through Bash with run_in_background true and the description "${str(input.description).replace(/"/g, "'")} · /runs ${run.id}": ` +
         `the run then shows in Background tasks, its progress streaming, and that task's notification reports its end. ` +
         `You will get a message here if it asks something; end your turn or keep working, do not wait on it.`,
     }
@@ -817,12 +827,7 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: 'runs' }, async ($, e) => {
-    const id = str(e.args).trim()
-    if (validId(id)) {
-      await refresh($, id)
-      await update($, selected, () => id)
-    }
-    await $.ui.open({ id: PANE, title: 'Runs' })
+    await openPane($, str(e.args).trim())
     return { text: 'Runs pane opened.' }
   })
 
