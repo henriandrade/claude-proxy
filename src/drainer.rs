@@ -199,9 +199,11 @@ struct Drainer {
 
 /// How long to wait for Claude to wake up on a finished task.
 const WAKE_GRACE: Duration = Duration::from_secs(120);
-/// How often a run on `auto` checks, between turns, for a better account: the
-/// quota cache's lifetime, so a check rarely waits on a lookup.
-const BALANCE_EVERY: Duration = Duration::from_secs(quota::CACHE_TTL_SECS as u64);
+/// How often a run on `auto` checks, between turns, for a better account, and
+/// how long an account takes no second run moving onto it for balance.
+const BALANCE_SECS: i64 = quota::CACHE_TTL_SECS;
+/// How long an account that refused a turn takes no run moving onto it.
+const REFUSED_SECS: i64 = 3600;
 
 impl Drainer {
     /// The drainer's stderr is the run's stderr.log.
@@ -318,26 +320,41 @@ impl Drainer {
             || self.meta.background > 0
             || self
                 .balance_checked
-                .is_some_and(|t| t.elapsed() < BALANCE_EVERY)
+                .is_some_and(|t| t.elapsed().as_secs() < BALANCE_SECS as u64)
             || std::env::var("CLAUDE_PROXY_REBALANCE").is_ok_and(|v| v.trim() == "0")
         {
             return;
         }
         self.balance_checked = Some(Instant::now());
-        let reports = quota::reports(&quota::auto_accounts(), false);
+        let accounts = quota::auto_accounts();
         let model = quota::model_arg(&self.meta.claude_args);
-        let Some((to, why)) =
-            quota::rebalance_target(&reports, now_secs(), model.as_deref(), &self.meta.account)
-        else {
+        let current = self.meta.account.clone();
+        let target = |reports: &[quota::Report]| {
+            quota::rebalance_target(reports, now_secs(), model.as_deref(), &current, |l| {
+                quota::stamped_within(l, "refused", REFUSED_SECS)
+            })
+        };
+        // The cache decides whether to look further, so a turn waits on the
+        // network only to confirm a move.
+        if target(&quota::cached_reports(&accounts)).is_none() {
+            return;
+        }
+        let Some(m) = target(&quota::reports(&accounts, false)) else {
             return;
         };
+        // One run at a time moves onto an account for balance, so runs do not
+        // all pile onto the same one before its figures catch up.
+        if !m.urgent && quota::stamped_within(&m.to, "moved-in", BALANCE_SECS) {
+            return;
+        }
+        quota::stamp(&m.to, "moved-in");
         self.close();
-        let from = std::mem::replace(&mut self.meta.account, to.clone());
+        let from = std::mem::replace(&mut self.meta.account, m.to.clone());
         marker(
             &self.dir,
-            json!({"event": "failover", "from": from, "to": to, "reason": why}),
+            json!({"event": "failover", "from": from, "to": m.to, "reason": m.why}),
         );
-        self.meta.moved = Some(format!("from {from}, which {why}"));
+        self.meta.moved = Some(format!("from {from}, which {}", m.why));
         self.save();
     }
 
@@ -510,6 +527,7 @@ impl Drainer {
         let from = self.meta.account.clone();
         if reason == Reason::Limit {
             quota::invalidate(&from);
+            quota::stamp(&from, "refused");
         }
         let next = if self.dir.join("stop").exists() {
             None
