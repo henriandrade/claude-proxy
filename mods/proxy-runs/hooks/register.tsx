@@ -513,7 +513,7 @@ async function openPane($: Engine, id?: string): Promise<void> {
 }
 
 async function card($: Engine, els: ElementTable, id: string, row: Row, opts: CardOpts = {}): Promise<RenderElement> {
-  const { Box, Text, Button } = els
+  const { Box, Text, Button, Code } = els
   const run = (await read($, runs)).find(r => r.id === id)
   if (!run) {
     ensure($, id)
@@ -545,8 +545,12 @@ async function card($: Engine, els: ElementTable, id: string, row: Row, opts: Ca
           <Text bold>{run.name ?? `Run ${run.id}`}</Text>
           <Text dimColor>{meta}</Text>
           <Button key={`reply:${id}`} plain dimColor label="Reply" onPress={() => talkTo($, id)} />
-          <Button key={`open:${id}`} plain dimColor label={`/runs ${id}`} onPress={() => openPane($, id)} />
-          <Button key={`all:${id}`} plain dimColor label="/runs" onPress={() => openPane($)} />
+        </Box>
+      )}
+      {!opts.inPane && (
+        <Box gap={1}>
+          <Code source={`/runs ${id}`} />
+          <Code source="/runs" />
         </Box>
       )}
       {issue && <Text color="yellow">{issue}</Text>}

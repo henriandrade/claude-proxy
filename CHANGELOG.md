@@ -22,8 +22,7 @@ has its own version and first shipped in 0.8.0.
 - proxy-runs: a run the tool starts asks Claude to background
   `claude-proxy watch --task <id>`, described `<name> · /runs <id>`, and the mod
   waits briefly before telling a finished run, so a watched run is reported
-  once. A run's row has `/runs <id>` and `/runs` buttons that open the Runs
-  pane without a prompt.
+  once. A run's row shows `/runs <id>` and `/runs` to copy.
 
 ## [0.10.0] - 2026-10-16
 
