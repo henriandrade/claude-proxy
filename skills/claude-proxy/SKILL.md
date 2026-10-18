@@ -105,7 +105,11 @@ Never spend turns polling. How to wait depends on where you are:
   runs? One Monitor on `claude-proxy events --mine` (if you have the Monitor
   tool) prints a line each time one of your runs finishes, fails, asks, or
   moves account. After a resume or a compaction, start your waits again —
-  the session-start note lists your runs still going.
+  the session-start note lists your runs still going. With the proxy-runs mod
+  (`mcp__proxy-runs__run` exists), background `claude-proxy watch --task <id>`
+  instead, described `<name> · claude-proxy <id>`: the run shows in Background
+  tasks with its progress streaming, it keeps following through asks (the mod
+  tells you about those), and it exits when the run ends, 1 if it failed.
 - **Inside a run** (`$CLAUDE_PROXY_RUN` is set): a run you start reports back
   to you — when it finishes, fails, or asks something, you get a message. So
   start it, then end your turn; do not wait on it. For any other long command

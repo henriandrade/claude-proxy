@@ -1,8 +1,36 @@
 //! Renders a run's `events.jsonl` one line at a time, so `--follow` can render incrementally.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use serde_json::Value;
 
 const ONE_LINE_MAX: usize = 140;
+
+// ponytail: process-wide, set once by `watch --task`; pass a style through if two looks share a process.
+static PAINTED: AtomicBool = AtomicBool::new(false);
+
+/// Claude Code's own look, in color, for the desktop app's Background tasks (it draws ANSI).
+pub fn paint() {
+    PAINTED.store(true, Ordering::Relaxed);
+}
+
+fn painted() -> bool {
+    PAINTED.load(Ordering::Relaxed)
+}
+
+const BOLD: &str = "1";
+const DIM: &str = "2";
+const RED: &str = "31";
+const GREEN: &str = "32";
+const YELLOW: &str = "33";
+
+pub fn ansi(code: &str, s: &str) -> String {
+    if painted() {
+        format!("\x1b[{code}m{s}\x1b[0m")
+    } else {
+        s.to_string()
+    }
+}
 
 /// `full` keeps tool inputs, output and messages whole; otherwise one line each.
 pub fn render_line(line: &str, full: bool) -> Vec<String> {
@@ -43,28 +71,33 @@ fn marker(v: &Value, full: bool) -> Vec<String> {
     match v.get("event").and_then(Value::as_str) {
         Some("message") => {
             let text = v.get("text").and_then(Value::as_str).unwrap_or("");
-            let mut out = vec![if v["during_turn"] == true {
-                "▶ you (while it works)".to_string()
-            } else {
-                "▶ you".to_string()
-            }];
+            let mut out = vec![ansi(
+                BOLD,
+                if v["during_turn"] == true {
+                    "▶ you (while it works)"
+                } else {
+                    "▶ you"
+                },
+            )];
             out.extend(indented(text, "  ", full));
             out
         }
-        Some("turn_start") => vec![format!(
-            "● {} · turn {}",
-            v.get("account").and_then(Value::as_str).unwrap_or("?"),
-            v.get("turn").and_then(Value::as_u64).unwrap_or(0)
+        Some("turn_start") => vec![ansi(
+            BOLD,
+            &format!(
+                "● {} · turn {}",
+                v.get("account").and_then(Value::as_str).unwrap_or("?"),
+                v.get("turn").and_then(Value::as_u64).unwrap_or(0)
+            ),
         )],
         Some("failover") => {
             let from = v.get("from").and_then(Value::as_str).unwrap_or("?");
             let reason = v.get("reason").and_then(Value::as_str).unwrap_or("failed");
-            match v.get("to").and_then(Value::as_str) {
-                Some(to) => vec![format!("⇄ {from} {reason} — continuing on {to}")],
-                None => vec![format!(
-                    "⇄ {from} {reason} — no other account to continue on"
-                )],
-            }
+            let line = match v.get("to").and_then(Value::as_str) {
+                Some(to) => format!("⇄ {from} {reason} — continuing on {to}"),
+                None => format!("⇄ {from} {reason} — no other account to continue on"),
+            };
+            vec![ansi(YELLOW, &line)]
         }
         Some("ask") => ask_lines(
             v.get("run").and_then(Value::as_str).unwrap_or("<id>"),
@@ -84,20 +117,24 @@ fn marker(v: &Value, full: bool) -> Vec<String> {
             )],
         },
         Some("note") => vec![format!(
-            "  · {}",
-            v.get("text").and_then(Value::as_str).unwrap_or("")
+            "  {}",
+            ansi(
+                DIM,
+                &format!("· {}", v.get("text").and_then(Value::as_str).unwrap_or(""))
+            )
         )],
         Some("turn_end") => {
             let killed = v.get("killed").and_then(Value::as_bool).unwrap_or(false);
-            match v.get("exit").and_then(Value::as_i64) {
-                _ if killed => vec!["■ killed".into()],
-                Some(0) => Vec::new(),
-                Some(code) => vec![format!("✗ claude exited with code {code}")],
+            let line = match v.get("exit").and_then(Value::as_i64) {
+                _ if killed => "■ killed".to_string(),
+                Some(0) => return Vec::new(),
+                Some(code) => format!("✗ claude exited with code {code}"),
                 None => match v.get("error").and_then(Value::as_str) {
-                    Some(e) => vec![format!("✗ {e}")],
-                    None => vec!["✗ claude was stopped by a signal".into()],
+                    Some(e) => format!("✗ {e}"),
+                    None => "✗ claude was stopped by a signal".to_string(),
                 },
-            }
+            };
+            vec![ansi(RED, &line)]
         }
         _ => Vec::new(),
     }
@@ -150,7 +187,7 @@ pub fn ask_lines(id: &str, tool: &str, input: &Value, full: bool) -> Vec<String>
                 if q["multiSelect"].as_bool() == Some(true) {
                     line.push_str("  (any of them)");
                 }
-                line
+                ansi(YELLOW, &line)
             })
             .collect();
         let slots = vec!["\"…\""; out.len().max(1)].join(" ");
@@ -159,9 +196,9 @@ pub fn ask_lines(id: &str, tool: &str, input: &Value, full: bool) -> Vec<String>
         ));
         return out;
     }
-    let mut out = vec![format!(
-        "? permission to use {tool}  {}",
-        tool_summary(tool, input)
+    let mut out = vec![ansi(
+        YELLOW,
+        &format!("? permission to use {tool}  {}", tool_summary(tool, input)),
     )];
     if full {
         let pretty = serde_json::to_string_pretty(input).unwrap_or_default();
@@ -195,6 +232,19 @@ fn blocks(v: &Value) -> Vec<Value> {
 
 fn assistant_block(b: &Value, full: bool) -> Vec<String> {
     match b.get("type").and_then(Value::as_str) {
+        Some("text") if painted() => {
+            let text = b.get("text").and_then(Value::as_str).unwrap_or("");
+            text.replace("**", "")
+                .trim()
+                .lines()
+                .enumerate()
+                .map(|(i, l)| match (i, l.is_empty()) {
+                    (0, _) => format!("⏺ {l}"),
+                    (_, true) => String::new(),
+                    _ => format!("  {l}"),
+                })
+                .collect()
+        }
         Some("text") => indented(
             b.get("text").and_then(Value::as_str).unwrap_or(""),
             "  ",
@@ -208,6 +258,13 @@ fn assistant_block(b: &Value, full: bool) -> Vec<String> {
                 let mut out = vec![format!("  ⚙ {name}")];
                 out.extend(indented(&pretty, "      ", true));
                 out
+            } else if painted() {
+                vec![format!(
+                    "{} {}({})",
+                    ansi(GREEN, "⏺"),
+                    ansi(BOLD, name),
+                    tool_summary(name, &input)
+                )]
             } else {
                 vec![format!("  ⚙ {name}  {}", tool_summary(name, &input))]
             }
@@ -250,6 +307,30 @@ fn tool_result(b: &Value, full: bool) -> Vec<String> {
         out.extend(lines.map(|l| format!("      {l}")));
         return out;
     }
+    if painted() {
+        let numbered = |l: &str| {
+            l.trim_start()
+                .split_once('\t')
+                .is_some_and(|(n, _)| n.parse::<u64>().is_ok())
+        };
+        let shown = match text.lines().find(|l| !l.trim().is_empty()) {
+            Some(first) if numbered(first) => format!("Read {} lines", text.lines().count()),
+            Some(first) => {
+                let rest = text.lines().filter(|l| !l.trim().is_empty()).count() - 1;
+                let more = if rest > 0 {
+                    format!("  (+{rest} lines)")
+                } else {
+                    String::new()
+                };
+                format!("{}{more}", one_line(first))
+            }
+            None => "(no output)".to_string(),
+        };
+        return vec![format!(
+            "  ⎿  {}",
+            ansi(if error { RED } else { DIM }, &shown)
+        )];
+    }
     let mut lines = text.lines().filter(|l| !l.trim().is_empty());
     let first = lines.next().unwrap_or("(no output)");
     let rest = lines.count();
@@ -283,7 +364,19 @@ fn result_line(v: &Value) -> String {
     if let Some(cost) = v.get("total_cost_usd").and_then(Value::as_f64) {
         parts.push(format!("${cost:.2}"));
     }
-    let mut line = parts.join(" · ");
+    let mut line = if painted() {
+        let (head, rest) = parts
+            .split_first()
+            .map_or((String::new(), &[][..]), |(h, r)| (h.clone(), r));
+        let tail = if rest.is_empty() {
+            String::new()
+        } else {
+            ansi(DIM, &format!(" · {}", rest.join(" · ")))
+        };
+        format!("{}{tail}", ansi(if ok { GREEN } else { RED }, &head))
+    } else {
+        parts.join(" · ")
+    };
     if !ok && subtype != "success" {
         if let Some(text) = v.get("result").and_then(Value::as_str) {
             line.push_str(&format!("\n  {}", one_line(text)));
@@ -307,7 +400,10 @@ fn rate_limit(v: &Value) -> Option<String> {
         .and_then(Value::as_f64)
         .map(|u| format!(" {:.0}%", u * 100.0))
         .unwrap_or_default();
-    Some(format!("  ⚠ rate limit: {kind}{used} ({status})"))
+    Some(format!(
+        "  {}",
+        ansi(YELLOW, &format!("⚠ rate limit: {kind}{used} ({status})"))
+    ))
 }
 
 fn indented(text: &str, prefix: &str, full: bool) -> Vec<String> {

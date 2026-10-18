@@ -1739,6 +1739,50 @@ fn news_tells_a_session_each_finished_turn_once() {
 }
 
 #[test]
+fn a_task_watch_reports_the_end_so_the_session_is_not_told_twice() {
+    let env = setup();
+    let exe = Path::new(env!("CARGO_BIN_EXE_claude-proxy"));
+    let mine = [(
+        "CLAUDE_CODE_SESSION_ID",
+        "88888888-8888-4888-8888-888888888888",
+    )];
+    let peek = || -> Vec<Value> {
+        serde_json::from_str(&stdout(&run_as(
+            &env,
+            exe,
+            &["news", "--json", "--peek"],
+            &mine,
+        )))
+        .unwrap()
+    };
+    assert!(peek().is_empty());
+
+    let id = stdout(&run_as(
+        &env,
+        exe,
+        &["run", "--account", "claude", "hi"],
+        &mine,
+    ));
+    let watched = run_as(&env, exe, &["watch", "--task", &id], &mine);
+    assert_eq!(watched.status.code(), Some(0));
+    let painted = stdout(&watched);
+    assert!(painted.contains(&format!("/runs {id}")), "{painted}");
+    assert!(painted.contains("⏺ echo: hi"), "{painted}");
+    assert!(painted.contains("\x1b[32m✓ done"), "{painted}");
+    settled(&env, &id);
+    assert!(peek().is_empty());
+
+    run_as(&env, exe, &["send", &id, "again"], &mine);
+    run_as(&env, exe, &["watch", &id], &mine);
+    settled(&env, &id);
+    assert_eq!(
+        peek().len(),
+        1,
+        "a plain watch leaves the telling to the session"
+    );
+}
+
+#[test]
 fn a_reopened_session_hears_what_finished_while_it_was_closed() {
     let env = setup();
     let exe = Path::new(env!("CARGO_BIN_EXE_claude-proxy"));

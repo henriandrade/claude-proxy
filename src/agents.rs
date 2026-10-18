@@ -401,6 +401,7 @@ pub fn read(
 
     let mut offset = complete as u64;
     let mut pending = String::new();
+    let mut asked: Vec<String> = Vec::new();
     loop {
         // Decide before reading, so the last lines are printed after it ends.
         let done = runs::finished(id)?;
@@ -415,6 +416,17 @@ pub fn read(
             let line: String = pending.drain(..=i).collect();
             for out in render(line.trim_end()) {
                 println!("{out}");
+            }
+        }
+        // Asks live outside the transcript; a run waiting on one is still followed.
+        if !as_json {
+            for ask in asks::pending(&runs::run_dir(id)) {
+                if !asked.iter().any(|k| k == ask.key()) {
+                    asked.push(ask.key().to_string());
+                    for line in ask_lines(id, &ask.tool, &ask.input, full) {
+                        println!("  {line}");
+                    }
+                }
             }
         }
         if done {
@@ -432,6 +444,36 @@ pub fn read(
         );
     }
     Ok(0)
+}
+
+pub fn task_start(id: &str) {
+    crate::render::paint();
+    println!(
+        "{}\n",
+        crate::render::ansi(
+            "2",
+            &format!("Every tool call and reply: /runs {id} · all runs: /runs")
+        )
+    );
+}
+
+pub fn task_end(id: &str) -> Result<i32, String> {
+    if let Some(session) = std::env::var("CLAUDE_CODE_SESSION_ID")
+        .ok()
+        .filter(|s| !s.is_empty())
+    {
+        let marks: Vec<String> = crate::hook::untold(&session, true, false)
+            .into_iter()
+            .filter(|n| n.meta.id == id)
+            .map(|n| n.mark)
+            .collect();
+        crate::hook::acknowledge(&session, &marks);
+    }
+    let m = runs::load(id)?;
+    Ok(match runs::effective_state(&m) {
+        State::Failed | State::Killed => 1,
+        _ => 0,
+    })
 }
 
 pub fn result(id: &str) -> Result<i32, String> {

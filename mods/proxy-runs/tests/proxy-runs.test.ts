@@ -38,6 +38,7 @@ type World = {
   logs: string[]
   noProcess: boolean
   files: Record<string, string>
+  opened: string[]
 }
 
 const META = {
@@ -91,6 +92,7 @@ function world(on: On, events: string[] = [], env: Record<string, string> = {}):
     logs: [],
     noProcess: false,
     files: {},
+    opened: [],
   }
   on('fs.list', () => ({ value: [{ name: 'abc123', kind: 'dir', size: 0, mtimeMs: 0, isLink: false }] }) as never)
   on('fs.read', ($, e) => ({ value: String(e.path).endsWith('meta.json') ? JSON.stringify(META) : EVENTS_JSONL }) as never)
@@ -110,7 +112,7 @@ function world(on: On, events: string[] = [], env: Record<string, string> = {}):
   })
   on('ui.toast', ($, e) => (w.toasts.push(e.text), { value: undefined }))
   on('ui.log', ($, e) => (w.logs.push(e.text), { value: undefined }))
-  on('ui.open', () => ({ value: { isPlaced: true } }) as never)
+  on('ui.open', ($, e) => (w.opened.push(e.id), { value: { isPlaced: true } }) as never)
   on('process.run', ($, e) => {
     if (w.noProcess) return { deny: 'CLI only' }
     w.argvs.push([...e.argv])
@@ -163,7 +165,7 @@ test('the tool starts a run and returns its id at once', async ($, on) => {
   })
   expect(ran.deny).toBeUndefined()
   expect(String(ran.result)).toContain('abc123')
-  expect(String(ran.result)).toContain('claude-proxy watch abc123')
+  expect(String(ran.result)).toContain('claude-proxy watch --task abc123')
   const i = w.argvs.findIndex(a => a[1] === 'run')
   expect(w.argvs[i]).toEqual([
     'claude-proxy', 'run', '-', '--json', '--name', 'say ok',
@@ -232,6 +234,15 @@ test('talking to a run that asks a question answers it', async ($, on) => {
   w.argvs = []
   expect((await $.prompt.submit(typed('Blue | Small'))).drop).toBe('Answered → run abc123')
   expect(w.argvs.find(a => a[1] === 'answer')).toEqual(['claude-proxy', 'answer', 'abc123', 'Blue', 'Small'])
+  await row.unmount()
+})
+
+test('the row shows the /runs commands to copy', async ($, on) => {
+  world(on)
+  await start($)
+  await $.tool.call({ tool: TOOL, tool_use_id: 'tu1', prompt: 'p', description: 'say ok' })
+  const row = await $.ui.mount({ plugin: 'proxy-runs', surface: 'desktop', component: 'ToolUse', requestId: 'tu1', props: toolUse('tu1') })
+  expect((await row.findAll({ type: 'Code' })).map(c => c.text)).toEqual(['/runs abc123', '/runs'])
   await row.unmount()
 })
 
@@ -416,6 +427,7 @@ test('the Runs pane lists runs and its buttons call the right command', async ($
 
 test('a finished run wakes the session with its result', async ($, on) => {
   const w = world(on)
+  on('clock.sleep', () => ({ value: undefined }))
   let woke = (_: string) => {}
   const submitted = new Promise<string>(resolve => (woke = resolve))
   on('prompt.submit', ($, e) => {
@@ -434,6 +446,7 @@ test('a finished run wakes the session with its result', async ($, on) => {
 
 test('a run result cannot close its fence or pose as an ask', async ($, on) => {
   const w = world(on)
+  on('clock.sleep', () => ({ value: undefined }))
   let woke = (_: string) => {}
   const submitted = new Promise<string>(resolve => (woke = resolve))
   on('prompt.submit', ($, e) => {

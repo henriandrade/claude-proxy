@@ -29,7 +29,9 @@ const BUILT_IN_AGENTS = [
 const POLICY =
   'claude-proxy runs: to delegate work (anything you would hand to the Agent tool, or a long or big task), ' +
   'call mcp__proxy-runs__run instead of `claude-proxy run` through Bash. It returns at once and this session ' +
-  'is told when the run finishes, fails or asks something. `claude-proxy status/answer/allow/deny/send` through ' +
+  'is told when the run finishes, fails or asks something. Then start `claude-proxy watch --task <id>` through ' +
+  'Bash in the background, so the run shows in Background tasks with its progress streaming. ' +
+  '`claude-proxy status/answer/allow/deny/send` through ' +
   'Bash still apply when the run rows and the /runs pane are not enough. Whenever the user asks to see, show, ' +
   'watch or follow runs, or what is running, call mcp__proxy-runs__watch (an id for one run, none for every ' +
   'run going here): it draws them live in this conversation, so answer with it rather than a table or a ' +
@@ -318,6 +320,8 @@ async function onEvent($: Engine, line: string): Promise<void> {
   if (!id) return
   const run = await refresh($, id)
   if (!run || !(DONE.includes(run.state) || run.state === 'waiting')) return
+  // Time for a `watch --task` following it to mark its end told (it polls every 400 ms).
+  if (DONE.includes(run.state)) await $.clock.sleep(1500)
   if (await tellNews($)) return
   const mine = Object.values(await read($, calls)).includes(id)
   const mark = `${run.state} ${run.turns}`
@@ -500,8 +504,16 @@ function nativeRow($: Engine, e: RenderInput<'ToolUse'>, next: (e: RenderInput<'
 
 type CardOpts = { inPane?: boolean; room?: number }
 
+async function openPane($: Engine, id?: string): Promise<void> {
+  if (id && validId(id)) {
+    await refresh($, id)
+    await update($, selected, () => id)
+  }
+  await $.ui.open({ id: PANE, title: 'Runs' })
+}
+
 async function card($: Engine, els: ElementTable, id: string, row: Row, opts: CardOpts = {}): Promise<RenderElement> {
-  const { Box, Text, Button } = els
+  const { Box, Text, Button, Code } = els
   const run = (await read($, runs)).find(r => r.id === id)
   if (!run) {
     ensure($, id)
@@ -533,6 +545,12 @@ async function card($: Engine, els: ElementTable, id: string, row: Row, opts: Ca
           <Text bold>{run.name ?? `Run ${run.id}`}</Text>
           <Text dimColor>{meta}</Text>
           <Button key={`reply:${id}`} plain dimColor label="Reply" onPress={() => talkTo($, id)} />
+        </Box>
+      )}
+      {!opts.inPane && (
+        <Box gap={1}>
+          <Code source={`/runs ${id}`} />
+          <Code source="/runs" />
         </Box>
       )}
       {issue && <Text color="yellow">{issue}</Text>}
@@ -613,9 +631,10 @@ export const register: Register = on => {
     await refresh($, run.id)
     return {
       result:
-        `Started claude-proxy run ${run.id} on ${run.account}. Watch it: \`claude-proxy watch ${run.id}\`. ` +
-        `You will get a message here when it finishes, fails or asks something; end your turn or keep working, ` +
-        `do not wait on it.`,
+        `Started claude-proxy run ${run.id} on ${run.account}. Now start \`claude-proxy watch --task ${run.id}\` ` +
+        `through Bash with run_in_background true and the description "${str(input.description).replace(/"/g, "'")} · /runs ${run.id}": ` +
+        `the run then shows in Background tasks, its progress streaming, and that task's notification reports its end. ` +
+        `You will get a message here if it asks something; end your turn or keep working, do not wait on it.`,
     }
   })
 
@@ -812,12 +831,7 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: 'runs' }, async ($, e) => {
-    const id = str(e.args).trim()
-    if (validId(id)) {
-      await refresh($, id)
-      await update($, selected, () => id)
-    }
-    await $.ui.open({ id: PANE, title: 'Runs' })
+    await openPane($, str(e.args).trim())
     return { text: 'Runs pane opened.' }
   })
 

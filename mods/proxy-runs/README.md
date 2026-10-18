@@ -7,7 +7,14 @@ A Claude Code mod (function-hooks plugin, Claude Code 2.1.287+) that makes
   (`prompt`, `description`, `subagent_type`, `model`, `isolation: "worktree"`,
   `cwd`, `name`), starts `claude-proxy run - --json …` with the task on stdin
   (`--agent` only for non-built-in types, `-- --model` for the model) and
-  returns at once with the run id, its account and `claude-proxy watch <id>`.
+  returns at once with the run id and its account, and asks Claude to start
+  `claude-proxy watch --task <id>` as a background Bash command.
+- **The pane, a copy away.** The row shows `/runs <id>` and `/runs` in copy
+  boxes, for the Runs pane on the run or on every run.
+- **In Background tasks.** That watch, described `<name> · /runs <id>`, puts the run in the desktop app's
+  Background tasks with its progress streaming, for as long as the run works.
+  Its notification reports the end, so the mod does not tell it again;
+  stopping the watch stops only the watch, and the mod then tells the end itself.
 - **A live row, drawn like Claude's own.** The tool's transcript row draws the
   run the way Claude draws a session: its name and `id · state on account ·
   turn · $`, the run's replies as Markdown, your messages to it, and its tool

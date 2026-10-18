@@ -155,6 +155,10 @@ enum Command {
         full: bool,
         #[arg(long)]
         json: bool,
+        /// As a Claude Code background task: its notification reports the end, so
+        /// this session is not told again, and it exits 1 when the run failed.
+        #[arg(long)]
+        task: bool,
     },
     /// Print the final answer of a run's last turn.
     Result { id: String },
@@ -300,7 +304,22 @@ fn dispatch(command: Command) -> Result<i32, String> {
             full,
             json,
         } => crate::agents::read(&id, Some(lines), follow, full, json),
-        Command::Watch { id, full, json } => crate::agents::read(&id, Some(10), true, full, json),
+        Command::Watch {
+            id,
+            full,
+            json,
+            task,
+        } => {
+            if task && !json {
+                crate::agents::task_start(&id);
+            }
+            let code = crate::agents::read(&id, Some(10), true, full, json)?;
+            if task {
+                crate::agents::task_end(&id)
+            } else {
+                Ok(code)
+            }
+        }
         Command::Result { id } => crate::agents::result(&id),
         Command::Send {
             id,
