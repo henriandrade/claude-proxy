@@ -163,7 +163,7 @@ test('the tool starts a run and returns its id at once', async ($, on) => {
   })
   expect(ran.deny).toBeUndefined()
   expect(String(ran.result)).toContain('abc123')
-  expect(String(ran.result)).toContain('claude-proxy watch abc123')
+  expect(String(ran.result)).toContain('claude-proxy watch --task abc123')
   const i = w.argvs.findIndex(a => a[1] === 'run')
   expect(w.argvs[i]).toEqual([
     'claude-proxy', 'run', '-', '--json', '--name', 'say ok',
@@ -416,6 +416,7 @@ test('the Runs pane lists runs and its buttons call the right command', async ($
 
 test('a finished run wakes the session with its result', async ($, on) => {
   const w = world(on)
+  on('clock.sleep', () => ({ value: undefined }))
   let woke = (_: string) => {}
   const submitted = new Promise<string>(resolve => (woke = resolve))
   on('prompt.submit', ($, e) => {
@@ -434,6 +435,7 @@ test('a finished run wakes the session with its result', async ($, on) => {
 
 test('a run result cannot close its fence or pose as an ask', async ($, on) => {
   const w = world(on)
+  on('clock.sleep', () => ({ value: undefined }))
   let woke = (_: string) => {}
   const submitted = new Promise<string>(resolve => (woke = resolve))
   on('prompt.submit', ($, e) => {

@@ -11,6 +11,17 @@ has its own version and first shipped in 0.8.0.
 
 ## [Unreleased]
 
+### Added
+
+- `claude-proxy watch --task <id>`: follow a run as a Claude Code background
+  task, so it shows in the desktop app's Background tasks with its progress
+  streaming. When the run ends it marks the end told to the session (the
+  task's notification reports it) and exits 1 if the run failed or was killed.
+  A watch also prints the run's asks as they come.
+- proxy-runs: a run the tool starts asks Claude to background
+  `claude-proxy watch --task <id>`, and the mod waits briefly before telling a
+  finished run, so a watched run is reported once.
+
 ## [0.10.0] - 2026-10-16
 
 ### Added

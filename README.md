@@ -222,6 +222,7 @@ $ claude-proxy watch $id
 | `claude-proxy status <id>` | state, what it is doing, what it is asking, Claude's summary of its last turn, cost (`--json`) |
 | `claude-proxy read <id>` | the transcript (`-n N`, `-f` to follow, `--full`, `--json` raw events) |
 | `claude-proxy tail <id>` / `watch <id>` | the last entries / follow live until it stops working |
+| `claude-proxy watch --task <id>` | the same as a Claude Code background task: the run shows in Background tasks, and the task's notification stands in for the session's own |
 | `claude-proxy result <id>` | the final answer of the last turn |
 | `claude-proxy send <id> "<message>"` | a follow-up; sent while it works, Claude folds it into the turn in progress. `--account` moves the run to other accounts |
 | `claude-proxy wait <id>` | block until it is done (exit 0 done, 1 failed or killed, 2 waiting for an answer, 124 on `--timeout`) |
