@@ -1,6 +1,6 @@
 {
   "name": "quota-router",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Agents delegate work to background Claude sessions they manage like subagents — follow, message, answer, wait for, and kill by id — spread across your Claude accounts by remaining quota, with automatic failover (`claude-proxy run` / `auto`).",
   "author": {
     "name": "ohmaseclaro",
