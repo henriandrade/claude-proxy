@@ -446,6 +446,17 @@ pub fn read(
     Ok(0)
 }
 
+pub fn task_start(id: &str) {
+    crate::render::paint();
+    println!(
+        "{}\n",
+        crate::render::ansi(
+            "2",
+            &format!("Every tool call and reply: /runs {id} · all runs: /runs")
+        )
+    );
+}
+
 pub fn task_end(id: &str) -> Result<i32, String> {
     if let Some(session) = std::env::var("CLAUDE_CODE_SESSION_ID")
         .ok()

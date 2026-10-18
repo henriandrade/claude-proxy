@@ -310,6 +310,9 @@ fn dispatch(command: Command) -> Result<i32, String> {
             json,
             task,
         } => {
+            if task && !json {
+                crate::agents::task_start(&id);
+            }
             let code = crate::agents::read(&id, Some(10), true, full, json)?;
             if task {
                 crate::agents::task_end(&id)

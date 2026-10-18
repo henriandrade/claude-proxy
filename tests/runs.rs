@@ -1765,7 +1765,10 @@ fn a_task_watch_reports_the_end_so_the_session_is_not_told_twice() {
     ));
     let watched = run_as(&env, exe, &["watch", "--task", &id], &mine);
     assert_eq!(watched.status.code(), Some(0));
-    assert!(stdout(&watched).contains("echo: hi"));
+    let painted = stdout(&watched);
+    assert!(painted.contains(&format!("/runs {id}")), "{painted}");
+    assert!(painted.contains("⏺ echo: hi"), "{painted}");
+    assert!(painted.contains("\x1b[32m✓ done"), "{painted}");
     settled(&env, &id);
     assert!(peek().is_empty());
 
