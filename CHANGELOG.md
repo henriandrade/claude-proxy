@@ -20,6 +20,13 @@ has its own version and first shipped in 0.8.0.
   limit, at one, and with unknown quota follow, in that order.
 - A model-scoped weekly cap (`7d fable`, `7d opus`, `7d sonnet`) now limits
   only runs whose `--model` is in that family.
+- A run on `auto` follows the balance instead of staying on the account it
+  started on: between turns, at most every 15 minutes and only while Claude has
+  no background tasks, it moves to the best account when that account drains
+  its weekly quota at least 1.5 times as fast (and 0.1 points an hour more), or
+  when its own account is near a limit. The move shows as `⇄` in the
+  transcript and as `moved` in `status`. `CLAUDE_PROXY_REBALANCE=0` turns it
+  off.
 
 ### Added
 

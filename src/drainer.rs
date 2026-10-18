@@ -55,6 +55,7 @@ pub fn drain(id: &str) -> Result<(), String> {
         idle: idle_timeout(),
         running: 0,
         wake_due: None,
+        balance_checked: None,
     };
     loop {
         match d.step() {
@@ -193,10 +194,14 @@ struct Drainer {
     running: u32,
     /// Since a background task ended while Claude was idle; it should wake up.
     wake_due: Option<Instant>,
+    balance_checked: Option<Instant>,
 }
 
 /// How long to wait for Claude to wake up on a finished task.
 const WAKE_GRACE: Duration = Duration::from_secs(120);
+/// How often a run on `auto` checks, between turns, for a better account: the
+/// quota cache's lifetime, so a check rarely waits on a lookup.
+const BALANCE_EVERY: Duration = Duration::from_secs(quota::CACHE_TTL_SECS as u64);
 
 impl Drainer {
     /// The drainer's stderr is the run's stderr.log.
@@ -250,6 +255,7 @@ impl Drainer {
         let during_turn = self.busy;
         let before = self.meta.state;
         if !during_turn {
+            self.rebalance();
             // Marked working before the inbox is emptied, so a waiter sees the
             // message in one place or the other.
             self.meta.state = State::Working;
@@ -300,6 +306,39 @@ impl Drainer {
                 json!({"event": "note", "text": format!("account switch ignored: {e}")}),
             ),
         }
+    }
+
+    /// Between turns, move a run on `auto` to an account whose weekly quota is
+    /// going to waste much faster, so long runs follow the balance instead of
+    /// staying where they started. Never while Claude has background tasks:
+    /// closing it would end them. `CLAUDE_PROXY_REBALANCE=0` turns it off.
+    fn rebalance(&mut self) {
+        if !self.meta.pool.is_empty()
+            || self.running > 0
+            || self.meta.background > 0
+            || self
+                .balance_checked
+                .is_some_and(|t| t.elapsed() < BALANCE_EVERY)
+            || std::env::var("CLAUDE_PROXY_REBALANCE").is_ok_and(|v| v.trim() == "0")
+        {
+            return;
+        }
+        self.balance_checked = Some(Instant::now());
+        let reports = quota::reports(&quota::auto_accounts(), false);
+        let model = quota::model_arg(&self.meta.claude_args);
+        let Some((to, why)) =
+            quota::rebalance_target(&reports, now_secs(), model.as_deref(), &self.meta.account)
+        else {
+            return;
+        };
+        self.close();
+        let from = std::mem::replace(&mut self.meta.account, to.clone());
+        marker(
+            &self.dir,
+            json!({"event": "failover", "from": from, "to": to, "reason": why}),
+        );
+        self.meta.moved = Some(format!("from {from}, which {why}"));
+        self.save();
     }
 
     /// A wake-up Claude owes for an ended task counts as background work.

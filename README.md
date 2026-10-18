@@ -205,7 +205,12 @@ the one whose unused weekly quota expires fastest: percent left per hour until
 its weekly reset. An account near its reset with quota left is spent before one
 with a distant reset. Ties go to the least pressure (the fullest window not yet
 reset). Accounts near a limit, at one, and with unknown quota come after, in
-that order. `auto` chooses once, at launch.
+that order. `auto` chooses once, at launch. A managed run on `auto` keeps
+choosing: between turns (at most every 15 minutes, and never while Claude has
+background tasks) it moves to the best account when that account drains its
+weekly quota at least 1.5 times as fast, or when its own is near a limit, so a
+long run does not pin one account for days. `CLAUDE_PROXY_REBALANCE=0` turns
+this off.
 
 ### Quota
 

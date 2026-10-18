@@ -180,6 +180,41 @@ pub fn choose_among(
         .map(|(i, _)| i)
 }
 
+/// A run moves between turns only when the best account drains its weekly
+/// quota this many times as fast as the run's account, and by this many points
+/// an hour: a move re-reads the conversation without the prompt cache.
+const MOVE_RATIO: f64 = 1.5;
+const MOVE_MIN_GAP: f64 = 0.1;
+
+/// Where a run on `current` should move between turns, if anywhere: the best
+/// account for `model`, when `current` is near or at a limit while the best has
+/// room, or when the best drains its weekly quota much faster.
+pub fn rebalance_target(
+    reports: &[Report],
+    now: i64,
+    model: Option<&str>,
+    current: &str,
+) -> Option<(String, String)> {
+    let best = &reports[choose_among(reports, now, model, |_| true)?];
+    let cur = reports.iter().find(|r| r.label == current)?;
+    if best.label == current || pressure_for(&best.windows, now, model)? >= NEAR_LIMIT {
+        return None;
+    }
+    if pressure_for(&cur.windows, now, model)? >= NEAR_LIMIT {
+        return Some((best.label.clone(), "is near its limit".into()));
+    }
+    let (b, c) = (drain_rate(best, now, model)?, drain_rate(cur, now, model)?);
+    (b >= c * MOVE_RATIO && b - c >= MOVE_MIN_GAP).then(|| {
+        (
+            best.label.clone(),
+            format!(
+                "spends weekly quota slower ({c:.2}%/h left to its reset, {} {b:.2}%/h)",
+                best.label
+            ),
+        )
+    })
+}
+
 /// The model a `claude` command line asks for: `--model x` or `--model=x`.
 pub fn model_arg<S: AsRef<std::ffi::OsStr>>(args: &[S]) -> Option<String> {
     let mut it = args.iter().map(|a| a.as_ref().to_string_lossy());
@@ -946,6 +981,41 @@ mod tests {
         assert_eq!(choose_for(&reports, 0, Some("claude-fable-5-1")), Some(1));
         assert_eq!(choose_for(&reports, 0, Some("claude-sonnet-5-5")), Some(0));
         assert_eq!(choose(&reports, 0), Some(1));
+    }
+
+    #[test]
+    fn rebalance_moves_only_for_a_clear_gain() {
+        let h = 3600;
+        let acct = |label: &str, used: f64, reset_h: i64| {
+            report(label, true, vec![window("7d", used, Some(reset_h * h))])
+        };
+        // 51% over 142h (0.36%/h) against 88% over 125h (0.70%/h): move.
+        let reports = vec![acct("busy", 49.0, 142), acct("idle", 12.0, 125)];
+        let (to, why) = rebalance_target(&reports, 0, None, "busy").unwrap();
+        assert_eq!(to, "idle");
+        assert!(why.contains("0.36"));
+        // Already on the best account: stay.
+        assert!(rebalance_target(&reports, 0, None, "idle").is_none());
+        // 0.60 against 0.70: not worth losing the cache.
+        let close = vec![acct("a", 0.0, 168), acct("b", 12.0, 125)];
+        assert!(rebalance_target(&close, 0, None, "a").is_none());
+        // Near a limit: move to any account with room.
+        let hot = vec![
+            report(
+                "hot",
+                true,
+                vec![
+                    window("5h", 96.0, Some(h)),
+                    window("7d", 20.0, Some(140 * h)),
+                ],
+            ),
+            acct("cool", 30.0, 150),
+        ];
+        assert_eq!(rebalance_target(&hot, 0, None, "hot").unwrap().0, "cool");
+        // Nowhere better to go, or the current account is unknown: stay.
+        let full = vec![acct("x", 96.0, 100), acct("y", 97.0, 100)];
+        assert!(rebalance_target(&full, 0, None, "x").is_none());
+        assert!(rebalance_target(&reports, 0, None, "gone").is_none());
     }
 
     #[test]
