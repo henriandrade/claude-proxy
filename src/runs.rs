@@ -453,7 +453,9 @@ pub(crate) fn next_account(meta: &Meta, tried: &[String]) -> Option<String> {
                 .filter(|a| !tried.contains(&a.label))
                 .collect();
             let reports = quota::reports(&candidates, false);
-            quota::choose(&reports, now_secs()).map(|i| reports[i].label.clone())
+            let model = quota::model_arg(&meta.claude_args);
+            quota::choose_for(&reports, now_secs(), model.as_deref())
+                .map(|i| reports[i].label.clone())
         }
         pool => next_in_pool(pool, tried),
     }
@@ -487,12 +489,12 @@ pub fn parse_pool(spec: &str) -> Result<Vec<String>, String> {
     Ok(pool)
 }
 
-pub fn first_account(pool: &[String]) -> Result<String, String> {
+pub fn first_account(pool: &[String], model: Option<&str>) -> Result<String, String> {
     if let Some(first) = pool.first() {
         return Ok(first.clone());
     }
     let reports = quota::reports(&quota::auto_accounts(), false);
-    quota::choose(&reports, now_secs())
+    quota::choose_for(&reports, now_secs(), model)
         .map(|i| reports[i].label.clone())
         .ok_or_else(|| crate::cli::NO_AUTO_ACCOUNT.into())
 }

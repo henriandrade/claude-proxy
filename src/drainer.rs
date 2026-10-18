@@ -283,7 +283,10 @@ impl Drainer {
             return;
         };
         let _ = fs::remove_file(self.dir.join("account"));
-        match parse_pool(spec.trim()).and_then(|pool| Ok((first_account(&pool)?, pool))) {
+        let model = crate::quota::model_arg(&self.meta.claude_args);
+        match parse_pool(spec.trim())
+            .and_then(|pool| Ok((first_account(&pool, model.as_deref())?, pool)))
+        {
             Ok((account, pool)) => {
                 if account != self.meta.account {
                     self.close();

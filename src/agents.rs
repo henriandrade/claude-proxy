@@ -8,7 +8,7 @@ use serde_json::json;
 
 use crate::asks::{self, Reply};
 use crate::paths::home;
-use crate::quota::{now_secs, short_duration};
+use crate::quota::{self, now_secs, short_duration};
 use crate::render::{ask_lines, render_line};
 use crate::runs::{self, Meta, NewRun, State, Waited};
 
@@ -31,7 +31,7 @@ pub fn run(opts: RunOpts) -> Result<i32, String> {
     runs::prune();
     let pool = runs::parse_pool(&opts.account)?;
     let fork_from = opts.fork.map(fork_source).transpose()?;
-    let first = runs::first_account(&pool)?;
+    let first = runs::first_account(&pool, quota::model_arg(&opts.claude_args).as_deref())?;
     // Same quota either way, and Claude's own subagent starts faster and is managed natively.
     if pool.is_empty()
         && fork_from.is_none()

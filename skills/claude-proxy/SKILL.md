@@ -225,12 +225,16 @@ want to inspect, message, or stop.
 
 ```bash
 claude-proxy list             # every account and its quota; → marks what auto picks
-claude-proxy list --json      # {pick, accounts: [{label, email, logged_in, pressure, windows, error}]}
+claude-proxy list --json      # {pick, accounts: [{label, email, logged_in, pressure, drain_rate, windows, error}]}
 claude-proxy list --refresh   # ignore the 15-minute cache
 ```
 
 `pressure` is the fullest usage window that has not reset (5-hour, 7-day,
-model-scoped weekly), in percent; the logged-in account with the lowest wins.
+model-scoped weekly), in percent. `drain_rate` is the percent of the weekly
+window still unused per hour until it resets. Among accounts under 95% in every
+window that limits the run (the model-scoped cap only for its `--model`), the
+highest `drain_rate` wins — weekly quota left at the reset is lost — and ties
+go to the lowest pressure.
 `claude (primary)` is the normal `~/.claude` login and competes too. Runs keep
 the cache current from Claude's own usage reports, so do not poll; `--refresh`
 only after a usage-limit error or when the user asks.

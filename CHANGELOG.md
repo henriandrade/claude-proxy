@@ -11,6 +11,21 @@ has its own version and first shipped in 0.8.0.
 
 ## [Unreleased]
 
+### Changed
+
+- Account choice (`auto`, a run's first account, failover) spends the weekly
+  quota that expires soonest: among accounts under 95% in every window that
+  limits the run, the one with the most unused weekly percent per hour until
+  its weekly reset wins, ties going to the least pressure. Accounts near a
+  limit, at one, and with unknown quota follow, in that order.
+- A model-scoped weekly cap (`7d fable`, `7d opus`, `7d sonnet`) now limits
+  only runs whose `--model` is in that family.
+
+### Added
+
+- `list` shows each account's weekly drain rate; `list --json` adds
+  `drain_rate`.
+
 ## [0.13.0] - 2026-10-29
 
 ### Added
