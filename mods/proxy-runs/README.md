@@ -11,6 +11,10 @@ A Claude Code mod (function-hooks plugin, Claude Code 2.1.287+) that makes
   `claude-proxy watch --task <id>` as a background Bash command.
 - **The pane, a copy away.** The row shows `/runs <id>` and `/runs` in copy
   boxes, for the Runs pane on the run or on every run.
+- **Your own account goes native.** When auto would pick the account this session
+  runs on, `claude-proxy run` exits 3 and the tool starts Claude's own background
+  subagent instead: same quota, quicker, managed by Claude. With
+  `isolation: "worktree"` it asks for the Agent tool with `[direct]` instead.
 - **In Background tasks.** That watch, described `<name> · /runs <id>`, puts the run in the desktop app's
   Background tasks with its progress streaming, for as long as the run works.
   Its notification reports the end, so the mod does not tell it again;

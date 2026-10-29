@@ -36,6 +36,8 @@ const POLICY =
   'watch or follow runs, or what is running, call mcp__proxy-runs__watch (an id for one run, none for every ' +
   'run going here): it draws them live in this conversation, so answer with it rather than a table or a ' +
   '`claude-proxy watch` command.'
+/** `run`'s exit code when auto picked this session's own account (agents::OWN_ACCOUNT in src/agents.rs). */
+const OWN_ACCOUNT = 3
 const ACTIVE = ['queued', 'working', 'waiting']
 const DONE = ['idle', 'failed', 'killed']
 /** Blocks a collapsed run shows. */
@@ -502,6 +504,26 @@ function nativeRow($: Engine, e: RenderInput<'ToolUse'>, next: (e: RenderInput<'
     }).catch(() => plainRow($, els, id, t, active))
 }
 
+// Same quota as a run on that account, and Claude's own subagent starts faster and is managed natively.
+async function runNatively($: Engine, input: Input, stdout: string): Promise<{ result: string } | { deny: string }> {
+  const account = str((JSON.parse(stdout) as { account?: unknown }).account)
+  const why = `Auto picked ${account}, the account this session already runs on`
+  if (input.isolation) {
+    return { deny: `${why}, so no run was started. Use the Agent tool with "[direct]" at the start of its description instead.` }
+  }
+  await $.agent.spawn({
+    prompt: input.prompt,
+    description: input.description,
+    ...(input.subagent_type ? { subagentType: input.subagent_type } : {}),
+    ...(input.model ? { model: input.model } : {}),
+    ...(input.cwd ? { cwd: input.cwd } : {}),
+    ...(input.name ? { name: input.name } : {}),
+  })
+  return {
+    result: `${why}, so it runs as Claude's own background subagent instead of a claude-proxy run. You are told when it finishes; do not wait on it.`,
+  }
+}
+
 type CardOpts = { inPane?: boolean; room?: number }
 
 async function openPane($: Engine, id?: string): Promise<void> {
@@ -625,6 +647,7 @@ export const register: Register = on => {
     if (ran === undefined) {
       return { deny: `${BIN} cannot be started from this session; run \`${BIN} run -\` through Bash instead.` }
     }
+    if (ran.exitCode === OWN_ACCOUNT) return runNatively($, input, ran.stdout)
     if (ran.exitCode !== 0) return { deny: `${BIN} run failed: ${ran.stderr.trim()}` }
     const run = JSON.parse(ran.stdout) as ProxyRunsRun
     await update($, calls, all => ({ ...all, [e.tool_use_id ?? run.id]: run.id }))

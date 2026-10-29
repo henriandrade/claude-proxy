@@ -11,6 +11,17 @@ has its own version and first shipped in 0.8.0.
 
 ## [Unreleased]
 
+### Changed
+
+- When auto would pick the account the calling Claude session already runs on,
+  a run would spend the same quota as Claude's own subagent, which starts faster
+  and is managed natively. So `claude-proxy run` with auto starts nothing there
+  and exits 3 (`--json` prints `{"started": false, "own": true, "account": …}`),
+  quota-router lets the Agent call go through, and the proxy-runs tool starts
+  Claude's own background subagent. The caller is read from the desktop app's
+  `CLAUDE_CODE_ACCOUNT_UUID` and `CLAUDE_CODE_ORGANIZATION_UUID`, else from the
+  session's `.claude.json`. Pin the account with `--account` to start a run anyway.
+
 ## [0.11.0] - 2026-10-18
 
 ### Added

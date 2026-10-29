@@ -39,6 +39,7 @@ type World = {
   noProcess: boolean
   files: Record<string, string>
   opened: string[]
+  own: string | null
 }
 
 const META = {
@@ -93,6 +94,7 @@ function world(on: On, events: string[] = [], env: Record<string, string> = {}):
     noProcess: false,
     files: {},
     opened: [],
+    own: null,
   }
   on('fs.list', () => ({ value: [{ name: 'abc123', kind: 'dir', size: 0, mtimeMs: 0, isLink: false }] }) as never)
   on('fs.read', ($, e) => ({ value: String(e.path).endsWith('meta.json') ? JSON.stringify(META) : EVENTS_JSONL }) as never)
@@ -120,6 +122,9 @@ function world(on: On, events: string[] = [], env: Record<string, string> = {}):
     const [, cmd] = e.argv
     if (cmd === 'status' && e.argv[2] !== 'abc123') {
       return { value: { exitCode: 1, stdout: '', stderr: 'no such run', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
+    if (cmd === 'run' && w.own) {
+      return { value: { exitCode: 3, stdout: JSON.stringify({ started: false, own: true, account: w.own }), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
     if (cmd === 'run' || cmd === 'status') return ok(JSON.stringify(w.status))
     if (cmd === 'runs') return ok(JSON.stringify(w.list))
@@ -244,6 +249,20 @@ test('the row shows the /runs commands to copy', async ($, on) => {
   const row = await $.ui.mount({ plugin: 'proxy-runs', surface: 'desktop', component: 'ToolUse', requestId: 'tu1', props: toolUse('tu1') })
   expect((await row.findAll({ type: 'Code' })).map(c => c.text)).toEqual(['/runs abc123', '/runs'])
   await row.unmount()
+})
+
+test("on this session's own account the tool starts Claude's own subagent", async ($, on) => {
+  const w = world(on)
+  w.own = 'claude-home'
+  const spawned: object[] = []
+  on('agent.spawn', ($, e) => (spawned.push(e), { model: 'haiku' }) as never)
+  await start($)
+  const ran = await $.tool.call({ tool: TOOL, tool_use_id: 'tu1', prompt: 'p', description: 'look', model: 'haiku' })
+  expect(String(ran.result)).toContain("runs as Claude's own background subagent")
+  expect(spawned).toEqual([expect.objectContaining({ prompt: 'p', description: 'look', model: 'haiku' })])
+  const isolated = await $.tool.call({ tool: TOOL, tool_use_id: 'tu2', prompt: 'p', description: 'look', isolation: 'worktree' })
+  expect(String(isolated.deny)).toContain('"[direct]"')
+  expect(spawned).toHaveLength(1)
 })
 
 const toolUse = (tool_use_id: string, extra: object = {}) => ({

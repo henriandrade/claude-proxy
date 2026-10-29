@@ -423,15 +423,60 @@ fn percent(v: Option<&Value>) -> Option<f64> {
     }
 }
 
-fn email(config_dir: Option<&Path>) -> Option<String> {
-    let path = match config_dir {
+fn claude_json(config_dir: Option<&Path>) -> PathBuf {
+    match config_dir {
         Some(dir) => dir.join(".claude.json"),
         None => home().join(".claude.json"),
-    };
+    }
+}
+
+fn login(path: &Path, key: &str) -> Option<String> {
     let v: Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
-    v.pointer("/oauthAccount/emailAddress")
+    v.pointer(&format!("/oauthAccount/{key}"))
         .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
         .map(str::to_string)
+}
+
+fn email(config_dir: Option<&Path>) -> Option<String> {
+    login(&claude_json(config_dir), "emailAddress")
+}
+
+/// Account and organization: the pair a quota belongs to.
+type Identity = (String, String);
+
+fn identity_in(path: &Path) -> Option<Identity> {
+    Some((
+        login(path, "accountUuid")?,
+        login(path, "organizationUuid")?,
+    ))
+}
+
+/// The Claude session this process runs under. The desktop app puts it in the
+/// environment; a terminal session is whoever its config dir is logged in as.
+pub(crate) fn caller() -> Option<Identity> {
+    let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+    if let (Some(account), Some(org)) = (
+        var("CLAUDE_CODE_ACCOUNT_UUID"),
+        var("CLAUDE_CODE_ORGANIZATION_UUID"),
+    ) {
+        return Some((account, org));
+    }
+    std::env::var_os("CLAUDECODE")?;
+    let dir = std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from);
+    identity_in(&claude_json(dir.as_deref()))
+}
+
+/// Whether `label` is the account the calling Claude session already runs on.
+pub fn is_callers(label: &str) -> bool {
+    let Some(caller) = caller() else {
+        return false;
+    };
+    accounts()
+        .iter()
+        .find(|a| a.label == label)
+        .and_then(|a| identity_in(&claude_json(a.config_dir.as_deref())))
+        .is_some_and(|id| id == caller)
 }
 
 pub fn invalidate(label: &str) {
@@ -644,6 +689,25 @@ mod tests {
         ];
         assert_eq!(pressure(&ws, now), Some(40.0));
         assert_eq!(pressure(&[], now), None);
+    }
+
+    #[test]
+    fn an_identity_needs_both_the_account_and_its_organization() {
+        let t = tempfile::tempdir().unwrap();
+        let file = t.path().join(".claude.json");
+        std::fs::write(
+            &file,
+            r#"{"oauthAccount":{"accountUuid":"a1","organizationUuid":"o1","emailAddress":"x@y"}}"#,
+        )
+        .unwrap();
+        assert_eq!(identity_in(&file), Some(("a1".into(), "o1".into())));
+        std::fs::write(
+            &file,
+            r#"{"oauthAccount":{"accountUuid":"a1","organizationUuid":""}}"#,
+        )
+        .unwrap();
+        assert_eq!(identity_in(&file), None);
+        assert_eq!(identity_in(&t.path().join("missing.json")), None);
     }
 
     #[test]

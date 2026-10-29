@@ -65,7 +65,10 @@ claude-proxy run "fix the failing test in src/parser.rs"
 claude-proxy wait a1b2c3       # as a background command
 ```
 
-`run` starts the session on the best account and prints only the id. Run each
+`run` starts the session on the best account and prints only the id. When
+auto picks the account your own session runs on, it starts nothing and exits 3:
+use your Agent tool for that task instead (`[direct]` at the start of its
+description); it is the same quota, and Claude's own subagent is quicker. Run each
 `claude-proxy` command on its own with the id written out — not inside `$(…)`,
 a shell variable, or a chain with other commands — so it matches the user's
 permission rule for `claude-proxy` instead of prompting or being refused. Pass a
