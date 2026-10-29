@@ -58,6 +58,16 @@ enum Command {
         /// The account, or `claude` for the primary login.
         label: String,
     },
+    /// Keep quota on an account for yourself, e.g. the one you chat on: `auto`
+    /// ranks it as if `points` fuller, so it picks it only when it is that much
+    /// emptier than the next one. 0 clears it.
+    Reserve {
+        /// The account, or `claude` for the primary login.
+        label: String,
+        /// Percentage points, 0–100.
+        #[arg(value_parser = clap::value_parser!(u8).range(0..=100))]
+        points: u8,
+    },
     /// Remove a proxy's command (its profile and login are kept).
     Remove {
         /// The command name to remove.
@@ -261,6 +271,7 @@ fn dispatch(command: Command) -> Result<i32, String> {
         Command::Add { label, no_auto } => add_cmd(&label, no_auto),
         Command::ExcludeAuto { label } => set_auto_cmd(&label, false),
         Command::IncludeAuto { label } => set_auto_cmd(&label, true),
+        Command::Reserve { label, points } => reserve_cmd(&label, points),
         Command::List { json, refresh } => list_cmd(json, refresh),
         Command::Auto { args } => auto_cmd(&args),
         Command::Remove { label } => remove_cmd(&label),
@@ -361,17 +372,35 @@ fn dispatch(command: Command) -> Result<i32, String> {
 pub(crate) const NO_AUTO_ACCOUNT: &str = "no logged-in account for auto to use. Add one with:  \
      claude-proxy add <name>, or let one back in with:  claude-proxy include-auto <name>";
 
-fn set_auto_cmd(label: &str, on: bool) -> Result<i32, String> {
+fn edit_account(label: &str, edit: impl FnOnce(&mut Registry)) -> Result<(), String> {
     let mut registry = Registry::load();
     if label != quota::PRIMARY_LABEL && !registry.has(label) {
         return Err(format!(
             "no account named {label:?}. See:  claude-proxy list"
         ));
     }
-    registry.set_in_auto(label, on);
+    edit(&mut registry);
     registry
         .save()
-        .map_err(|e| format!("could not update the registry: {e}"))?;
+        .map_err(|e| format!("could not update the registry: {e}"))
+}
+
+fn reserve_cmd(label: &str, points: u8) -> Result<i32, String> {
+    edit_account(label, |r| r.set_reserve(label, points))?;
+    if points == 0 {
+        println!("{label} has no reserve: auto ranks it by its usage alone.");
+    } else {
+        println!(
+            "auto now ranks {label} as if {points} points fuller, so it picks {label} only \
+             when it is that much emptier than the next account. Clear it with:  \
+             claude-proxy reserve {label} 0"
+        );
+    }
+    Ok(0)
+}
+
+fn set_auto_cmd(label: &str, on: bool) -> Result<i32, String> {
+    edit_account(label, |r| r.set_in_auto(label, on))?;
     if on {
         println!("{label} is back in auto.");
     } else {
@@ -443,6 +472,7 @@ fn list_cmd(as_json: bool, refresh: bool) -> Result<i32, String> {
                     "email": r.email,
                     "logged_in": r.logged_in,
                     "auto": registry.in_auto(&r.label),
+                    "reserve": r.reserve,
                     "pressure": r.pressure(now),
                     "windows": r.windows.iter().map(|w| json!({
                         "name": w.name,
@@ -481,6 +511,9 @@ fn list_cmd(as_json: bool, refresh: bool) -> Result<i32, String> {
         );
         if !registry.in_auto(&r.label) {
             line.push_str("  (not in auto)");
+        }
+        if r.reserve > 0 {
+            line.push_str(&format!("  (reserve {})", r.reserve));
         }
         if !r.primary && !install::command_path(&bin_dir, &r.label).exists() {
             line.push_str("  (command missing — `claude-proxy add` to reinstall)");

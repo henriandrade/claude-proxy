@@ -30,16 +30,20 @@ pub const PRIMARY_LABEL: &str = "claude";
 pub struct Account {
     pub label: String,
     pub config_dir: Option<PathBuf>,
+    pub reserve: u8,
 }
 
 pub fn accounts() -> Vec<Account> {
+    let registry = Registry::load();
     let mut all = vec![Account {
         label: PRIMARY_LABEL.into(),
         config_dir: None,
+        reserve: registry.reserve(PRIMARY_LABEL),
     }];
-    all.extend(Registry::load().labels.into_iter().map(|label| Account {
-        config_dir: Some(account_config_dir(&label)),
-        label,
+    all.extend(registry.labels.iter().map(|label| Account {
+        label: label.clone(),
+        config_dir: Some(account_config_dir(label)),
+        reserve: registry.reserve(label),
     }));
     all
 }
@@ -79,6 +83,7 @@ pub struct Report {
     pub windows: Vec<Window>,
     pub fetched_at: Option<i64>,
     pub error: Option<String>,
+    pub reserve: u8,
 }
 
 impl Report {
@@ -100,9 +105,15 @@ pub fn choose(reports: &[Report], now: i64) -> Option<usize> {
 
 /// The best of the reports `keep` accepts, as an index into all of them.
 pub fn choose_among(reports: &[Report], now: i64, keep: impl Fn(&Report) -> bool) -> Option<usize> {
+    // A reserve never ranks an account behind one already at its limit.
     let rank = |r: &Report| match r.pressure(now) {
-        Some(p) => (0u8, p, weekly_used(r, now)),
-        None => (1u8, 0.0, 0.0),
+        Some(p) => (
+            0u8,
+            p >= 100.0,
+            p + f64::from(r.reserve),
+            weekly_used(r, now),
+        ),
+        None => (1u8, false, 0.0, 0.0),
     };
     reports
         .iter()
@@ -142,6 +153,7 @@ fn reports_with(accounts: &[Account], lookup: impl Fn(&Account) -> Report + Sync
                     windows: Vec::new(),
                     fetched_at: None,
                     error: Some("quota lookup failed".into()),
+                    reserve: a.reserve,
                 })
             })
             .collect()
@@ -160,6 +172,7 @@ pub fn report(account: &Account, force: bool) -> Report {
         windows: Vec::new(),
         fetched_at: None,
         error: None,
+        reserve: account.reserve,
     };
     let apply_cache = |r: &mut Report| {
         if let Some((at, usage)) = &cached {
@@ -621,6 +634,7 @@ mod tests {
             windows,
             fetched_at: None,
             error: None,
+            reserve: 0,
         }
     }
 
@@ -631,6 +645,7 @@ mod tests {
             .map(|label| Account {
                 label: label.into(),
                 config_dir: Some(PathBuf::from(label)),
+                reserve: 0,
             })
             .collect();
         let got = reports_with(&accounts, |a| {
@@ -733,6 +748,20 @@ mod tests {
         assert_eq!(choose(&reports, now), Some(3));
         assert_eq!(choose(&reports[..3], now), Some(0));
         assert_eq!(choose(&reports[1..2], now), None);
+    }
+
+    #[test]
+    fn a_reserve_ranks_an_account_as_that_much_fuller_but_never_behind_a_full_one() {
+        let mut mine = report("mine", true, vec![window("5h", 40.0, None)]);
+        mine.reserve = 25;
+        let other = |used| report("other", true, vec![window("5h", used, None)]);
+        assert_eq!(choose(&[mine, other(60.0)], 0), Some(1));
+        let mut mine = report("mine", true, vec![window("5h", 30.0, None)]);
+        mine.reserve = 25;
+        assert_eq!(choose(&[mine, other(60.0)], 0), Some(0));
+        let mut mine = report("mine", true, vec![window("5h", 90.0, None)]);
+        mine.reserve = 25;
+        assert_eq!(choose(&[mine, other(100.0)], 0), Some(0));
     }
 
     #[test]

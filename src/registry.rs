@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -13,6 +14,10 @@ pub struct Registry {
     /// Naming one still uses it. May hold `claude`, the primary.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub not_auto: Vec<String>,
+    /// Points `auto` adds to an account's usage when ranking it, so quota stays for
+    /// the account you chat on. May hold `claude`, the primary.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub reserve: BTreeMap<String, u8>,
 }
 
 impl Registry {
@@ -58,6 +63,19 @@ impl Registry {
     pub fn remove(&mut self, label: &str) {
         self.labels.retain(|l| l != label);
         self.not_auto.retain(|l| l != label);
+        self.reserve.remove(label);
+    }
+
+    pub fn reserve(&self, label: &str) -> u8 {
+        self.reserve.get(label).copied().unwrap_or(0)
+    }
+
+    pub fn set_reserve(&mut self, label: &str, points: u8) {
+        if points == 0 {
+            self.reserve.remove(label);
+        } else {
+            self.reserve.insert(label.to_string(), points);
+        }
     }
 
     pub fn in_auto(&self, label: &str) -> bool {
@@ -116,6 +134,25 @@ mod tests {
         assert_eq!(r.not_auto, ["client"]);
         r.remove("client");
         assert!(r.not_auto.is_empty());
+    }
+
+    #[test]
+    fn a_reserve_is_set_cleared_and_dropped_with_its_account() {
+        let mut r = Registry::default();
+        r.add("work");
+        r.set_reserve("claude", 25);
+        r.set_reserve("work", 10);
+        assert_eq!(
+            (r.reserve("claude"), r.reserve("work"), r.reserve("x")),
+            (25, 10, 0)
+        );
+        assert_eq!(
+            serde_json::to_string(&r).unwrap(),
+            r#"{"labels":["work"],"reserve":{"claude":25,"work":10}}"#
+        );
+        r.set_reserve("claude", 0);
+        r.remove("work");
+        assert!(r.reserve.is_empty());
     }
 
     #[test]

@@ -11,6 +11,15 @@ has its own version and first shipped in 0.8.0.
 
 ## [Unreleased]
 
+### Added
+
+- `claude-proxy reserve <account> <points>`: `auto` ranks the account as if that
+  many points fuller, so it picks it only when it is that much emptier than the
+  next one, and background work drains the other accounts before the one you
+  chat on. It applies to every auto pick, failover included, never ranks an
+  account behind one at its limit, and `0` clears it. `list` shows `(reserve N)`
+  and `--json` a `reserve` field.
+
 ## [0.12.0] - 2026-10-29
 
 ### Changed
