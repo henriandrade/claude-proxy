@@ -67,6 +67,8 @@ pub fn run(event: &str) -> i32 {
             0
         }
         "pre-tool-use" => match redirect(&v, speaks) {
+            // The run would land on this session's own account: Claude's subagent is the better run.
+            Some(_) if own_pick() => 0,
             Some(message) => {
                 eprintln!("{message}");
                 2
@@ -75,6 +77,12 @@ pub fn run(event: &str) -> i32 {
         },
         _ => 0,
     }
+}
+
+fn own_pick() -> bool {
+    // Caller first: it costs no quota lookup, which the hook's 5 s timeout may not fit.
+    crate::quota::caller().is_some()
+        && crate::runs::first_account(&[]).is_ok_and(|first| crate::quota::is_callers(&first))
 }
 
 fn remember_mode(v: &Value) {

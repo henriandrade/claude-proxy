@@ -319,8 +319,11 @@ to resume its Claude session, which stays.
 Its SessionStart hook adds the delegation policy to each session, ahead of
 workflows that say to use the Agent tool. An Agent or Task call that slips
 through is turned back with the equivalent `claude-proxy run`, unless its
-description starts with `[direct]`. `CLAUDE_PROXY_POLICY=off` keeps the skill
-and drops the default. Inside a run the hooks stay silent.
+description starts with `[direct]`, or auto would pick the account the session
+already runs on: there a run would spend the same quota, so Claude's own subagent
+goes ahead. For the same reason `claude-proxy run` with auto starts nothing in that
+case and exits 3. `CLAUDE_PROXY_POLICY=off` keeps the skill and drops the default.
+Inside a run the hooks stay silent.
 
 Agents call claude-proxy through Bash, so each call asks for permission unless
 you add `"Bash(claude-proxy:*)"` to `permissions.allow`. That also lets an agent

@@ -32,6 +32,25 @@ pub fn run(opts: RunOpts) -> Result<i32, String> {
     let pool = runs::parse_pool(&opts.account)?;
     let fork_from = opts.fork.map(fork_source).transpose()?;
     let first = runs::first_account(&pool)?;
+    // Same quota either way, and Claude's own subagent starts faster and is managed natively.
+    if pool.is_empty()
+        && fork_from.is_none()
+        && std::env::var_os("CLAUDE_PROXY_RUN").is_none()
+        && crate::quota::is_callers(&first)
+    {
+        eprintln!(
+            "claude-proxy: no run started. Auto picked {first}, the account this Claude session \
+             already runs on, so use your own Agent tool for this instead (start its description \
+             with \"[direct]\"). To start a run here anyway:  claude-proxy run --account {first} …"
+        );
+        if opts.json {
+            println!(
+                "{}",
+                json!({"started": false, "own": true, "account": first})
+            );
+        }
+        return Ok(OWN_ACCOUNT);
+    }
     let cwd = match opts.cwd {
         Some(dir) => dir,
         None => std::env::current_dir().map_err(|e| format!("no current directory: {e}"))?,
@@ -445,6 +464,9 @@ pub fn read(
     }
     Ok(0)
 }
+
+/// `run`'s exit code when auto picked the caller's own account and started nothing.
+pub const OWN_ACCOUNT: i32 = 3;
 
 pub fn task_start(id: &str) {
     crate::render::paint();
