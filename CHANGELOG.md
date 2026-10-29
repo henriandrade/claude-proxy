@@ -11,6 +11,8 @@ has its own version and first shipped in 0.8.0.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-29
+
 ### Changed
 
 - When auto would pick the account the calling Claude session already runs on,
@@ -340,7 +342,8 @@ Plugin only.
   manager or a per-account command depending on `argv[0]`; `add`, `list` and
   `remove`; quota from the OAuth usage endpoint; hermetic tests.
 
-[Unreleased]: https://github.com/ohmaseclaro/claude-proxy/compare/6c20531...main
+[Unreleased]: https://github.com/ohmaseclaro/claude-proxy/compare/a1122ad...main
+[0.12.0]: https://github.com/ohmaseclaro/claude-proxy/commit/a1122ad
 [0.11.0]: https://github.com/ohmaseclaro/claude-proxy/commit/6c20531
 [0.10.0]: https://github.com/ohmaseclaro/claude-proxy/commit/f521da7
 [0.9.0]: https://github.com/ohmaseclaro/claude-proxy/commit/8b6cda7
