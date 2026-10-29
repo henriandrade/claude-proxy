@@ -192,8 +192,8 @@ pub fn report(account: &Account, force: bool) -> Report {
     // Always check the login, even on a cache hit, so a logged-out account is
     // never picked on stale figures.
     let blob = match creds::read(&source) {
-        Ok(Some(b)) => b,
-        Ok(None) => {
+        Ok(Some(b)) if !signed_out(&b) => b,
+        Ok(_) => {
             // Claude leaves the last identity in `.claude.json` after a logout.
             r.logged_in = false;
             r.email = None;
@@ -241,6 +241,13 @@ fn fetch_live(
     }
     let token = oauth_str(&doc, "accessToken").ok_or("no access token in the credential")?;
     get_usage(&token, &account.label)
+}
+
+/// A credential item can outlive its login with blank tokens.
+fn signed_out(blob: &str) -> bool {
+    serde_json::from_str::<Value>(blob).is_ok_and(|doc| {
+        oauth_str(&doc, "accessToken").is_none() && oauth_str(&doc, "refreshToken").is_none()
+    })
 }
 
 fn oauth_str(doc: &Value, key: &str) -> Option<String> {
@@ -762,6 +769,19 @@ mod tests {
         let mut mine = report("mine", true, vec![window("5h", 90.0, None)]);
         mine.reserve = 25;
         assert_eq!(choose(&[mine, other(100.0)], 0), Some(0));
+    }
+
+    #[test]
+    fn a_credential_with_blank_tokens_is_signed_out() {
+        assert!(signed_out(
+            r#"{"claudeAiOauth":{"accessToken":"","refreshToken":"","expiresAt":0}}"#
+        ));
+        assert!(signed_out(r#"{"mcpOAuth":{}}"#));
+        assert!(!signed_out(r#"{"claudeAiOauth":{"accessToken":"a"}}"#));
+        assert!(!signed_out(
+            r#"{"claudeAiOauth":{"accessToken":"","refreshToken":"r"}}"#
+        ));
+        assert!(!signed_out("not json"));
     }
 
     #[test]
