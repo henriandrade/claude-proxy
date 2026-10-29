@@ -149,6 +149,18 @@ $ claude-proxy include-auto claude-client    # let auto use it again
 its failover. Naming it still uses it: its own command (`claude-client`), or
 `claude-proxy run --account claude-client`. `list` marks it `(not in auto)`.
 
+Keep quota on the account you chat on, so background work drains the others
+first:
+
+```console
+$ claude-proxy reserve claude 25    # auto ranks it as if 25 points fuller
+$ claude-proxy reserve claude 0     # clear it
+```
+
+With 25, the account at 40% loses to one at 60% and wins over one at 70%. A
+reserve never puts it behind an account already at its limit. `list` marks it
+`(reserve 25)`.
+
 ```console
 $ id=$(claude-proxy run "fix the failing test in src/parser.rs")
 $ claude-proxy watch $id                                 # follow it live
