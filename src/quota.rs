@@ -277,7 +277,7 @@ fn refresh_locked(account: &Account, source: &creds::Source, now: i64) -> Result
     if let Some(parent) = lock_path.parent() {
         let _ = crate::paths::private_dir(parent);
     }
-    let lock = crate::paths::append(&lock_path)
+    let lock = crate::paths::lockable(&lock_path)
         .map_err(|e| format!("could not create the refresh lock: {e}"))?;
     lock.lock()
         .map_err(|e| format!("could not take the refresh lock: {e}"))?;

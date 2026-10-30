@@ -289,17 +289,8 @@ pub(crate) fn inbox_names(dir: &Path) -> Vec<String> {
         .collect()
 }
 
-/// Opened for writing: Windows' LockFileEx wants read or write access, which
-/// an append-only handle lacks.
 pub(crate) fn lock_file(dir: &Path) -> std::io::Result<File> {
-    let mut options = fs::OpenOptions::new();
-    options.read(true).write(true).create(true).truncate(false);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    options.open(dir.join("run.lock"))
+    crate::paths::lockable(&dir.join("run.lock"))
 }
 
 /// A drainer holds the lock exclusively. Probed with a shared lock, so two

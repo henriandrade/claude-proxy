@@ -126,6 +126,20 @@ fn rename(from: &Path, to: &Path) -> std::io::Result<()> {
     }
 }
 
+/// A file to take an advisory lock on. Opened for reading and writing:
+/// Windows' LockFileEx wants read or write access, which an append-only handle
+/// lacks, so locking an [`append`] handle fails there with "Access is denied".
+pub fn lockable(path: &Path) -> std::io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path)
+}
+
 pub fn append(path: &Path) -> std::io::Result<File> {
     let mut options = OpenOptions::new();
     options.create(true).append(true);
@@ -209,6 +223,19 @@ mod tests {
             w.join().unwrap().unwrap();
         }
         assert!(payloads.contains(&fs::read(&p).unwrap()));
+    }
+
+    #[test]
+    fn a_lockable_file_takes_a_lock() {
+        let t = tempfile::tempdir().unwrap();
+        let path = t.path().join("x.lock");
+        let lock = lockable(&path).unwrap();
+        lock.lock().unwrap();
+        drop(lock);
+        // Reopening leaves what was written there.
+        fs::write(&path, b"kept").unwrap();
+        lockable(&path).unwrap().lock().unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"kept");
     }
 
     #[cfg(unix)]
